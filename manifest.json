@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Live Subtitles Anywhere",
+  "version": "1.2.0",
+  "description": "Subtitles for any video on any website: live AI subtitles in any language, or load your own subtitle file perfectly synced.",
+  "permissions": ["tabCapture", "offscreen", "storage", "activeTab", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Live Subtitles" }
+}
