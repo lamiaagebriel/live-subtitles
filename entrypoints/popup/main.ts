@@ -32,7 +32,7 @@ const ENCODINGS: [code: string, name: string][] = [
 ];
 const SUB_EXT = /\.(srt|vtt|ass|ssa|txt)$/i;
 
-// Elements of sidepanel/index.html (every id used here exists in the markup)
+// Elements of popup/index.html (every id used here exists in the markup)
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id);
 const field = (id: string) => $<HTMLInputElement | HTMLSelectElement>(id);
