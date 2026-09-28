@@ -10,10 +10,14 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.11.0",
     "typescript": "~5.9",
+    "typescript-eslint": "^8.70.1",
     "wxt": "^0.21.4"
   }
 }

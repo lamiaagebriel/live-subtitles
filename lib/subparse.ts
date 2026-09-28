@@ -20,7 +20,7 @@ const LEGACY: [encoding: string, letters: string][] = [
 
 export function decode(buf: ArrayBuffer, enc = "auto"): string {
   const bytes = new Uint8Array(buf);
-  const clean = (s: string) => s.replace(/^﻿/, "");
+  const clean = (s: string) => s.replace(/^\uFEFF/, ""); // strip the byte-order mark
   if (enc && enc !== "auto") return clean(new TextDecoder(enc).decode(bytes));
   if (bytes[0] === 0xFF && bytes[1] === 0xFE) return clean(new TextDecoder("utf-16le").decode(bytes));
   if (bytes[0] === 0xFE && bytes[1] === 0xFF) return clean(new TextDecoder("utf-16be").decode(bytes));
