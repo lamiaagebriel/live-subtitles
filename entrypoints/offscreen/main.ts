@@ -2,18 +2,19 @@ import { browser } from "wxt/browser";
 import { translateText } from "@/lib/translate";
 import { LIVE_DEFAULTS, type LiveSettings } from "@/lib/settings";
 import { sendToBackground, type LiveTextMessage, type OffscreenMessage } from "@/lib/messages";
+import { Chunker, type Chunk } from "@/lib/chunker";
+import { downsample, encodeWav } from "@/lib/wav";
 
-// Captures tab audio, cuts it into short chunks, transcribes each chunk,
+// Captures tab audio, cuts it into short chunks at pauses, transcribes each chunk,
 // optionally translates, and sends the text back to be shown on the page.
 
-const CHUNK_MS = 5000;          // length of each audio piece sent for transcription
-const SILENCE_RMS = 0.012;      // chunks quieter than this are skipped (saves API calls, avoids hallucinations)
+const SILENCE_RMS = 0.012;      // quieter than this is silence (silent chunks are skipped: saves API calls, avoids hallucinations)
 const HALLUCINATIONS = /^(you|thank you\.?|thanks for watching!?|thank you for watching\.?|subtitles by .*|\.+|♪+)$/i;
 
 let stream: MediaStream | null = null;
 let audioCtx: AudioContext | null = null;
-let levelTimer: ReturnType<typeof setInterval> | undefined;
-let running = false, settings: LiveSettings = LIVE_DEFAULTS, peak = 0, lastText = "";
+let chunker: Chunker | null = null;
+let running = false, settings: LiveSettings = LIVE_DEFAULTS, lastText = "";
 let queue: Promise<void> = Promise.resolve();
 
 browser.runtime.onMessage.addListener((msg: OffscreenMessage | { target?: undefined }) => {
@@ -46,50 +47,35 @@ async function startCapture(streamId: string, s: LiveSettings) {
   const source = audioCtx.createMediaStreamSource(stream);
   source.connect(audioCtx.destination);
 
-  // Loudness meter used to skip silent chunks
-  const analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  source.connect(analyser);
-  const buf = new Float32Array(analyser.fftSize);
-  levelTimer = setInterval(() => {
-    analyser.getFloatTimeDomainData(buf);
-    let sum = 0;
-    for (const v of buf) sum += v * v;
-    peak = Math.max(peak, Math.sqrt(sum / buf.length));
-  }, 100);
+  // Raw samples from the audio thread, cut into chunks with no gaps between them
+  const ctx = audioCtx;
+  await ctx.audioWorklet.addModule(browser.runtime.getURL("/pcm-worklet.js"));
+  const tap = new AudioWorkletNode(ctx, "pcm-tap", { numberOfInputs: 1, numberOfOutputs: 1 });
+  const mute = ctx.createGain();
+  mute.gain.value = 0; // the worklet only runs while connected to the output; keep it silent
+  source.connect(tap).connect(mute).connect(ctx.destination);
+  chunker = new Chunker({ sampleRate: ctx.sampleRate, silenceRms: SILENCE_RMS });
+  tap.port.onmessage = (e: MessageEvent<Float32Array>) => onBlock(e.data, ctx.sampleRate);
 
   running = true;
-  recordChunk();
 }
 
-function recordChunk() {
-  if (!running || !stream) return;
-  const parts: Blob[] = [];
-  const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-  peak = 0;
-  rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
-  rec.onstop = () => {
-    const loud = peak >= SILENCE_RMS;
-    recordChunk(); // start the next chunk right away
-    if (loud && parts.length) {
-      const blob = new Blob(parts, { type: "audio/webm" });
-      queue = queue.then(() => handleChunk(blob)).catch(() => {});
-    }
-  };
-  rec.start();
-  setTimeout(() => { if (rec.state === "recording") rec.stop(); }, CHUNK_MS);
+function onBlock(block: Float32Array, rate: number) {
+  if (!running || !chunker) return;
+  const chunk = chunker.push(block);
+  if (chunk?.loud) queue = queue.then(() => handleChunk(chunk, rate)).catch(() => {});
 }
 
 function stopCapture() {
   running = false;
-  clearInterval(levelTimer);
   stream?.getTracks().forEach((t) => t.stop());
   audioCtx?.close();
-  stream = audioCtx = null;
+  stream = audioCtx = chunker = null;
   lastText = "";
 }
 
-async function handleChunk(blob: Blob) {
+async function handleChunk(chunk: Chunk, rate: number) {
+  const blob = new Blob([encodeWav(downsample(chunk.samples, rate))], { type: "audio/wav" });
   if (!running) return;
   let text: string;
   try {
@@ -118,7 +104,7 @@ async function transcribe(blob: Blob): Promise<string> {
     ? "https://api.openai.com/v1/audio/transcriptions"
     : "https://api.groq.com/openai/v1/audio/transcriptions";
   const fd = new FormData();
-  fd.append("file", blob, "audio.webm");
+  fd.append("file", blob, "audio.wav");
   fd.append("model", openai ? "whisper-1" : "whisper-large-v3-turbo");
   fd.append("response_format", "json");
   fd.append("temperature", "0");

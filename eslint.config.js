@@ -11,5 +11,10 @@ export default tseslint.config(
       // `catch {}` is used on purpose for best-effort calls (a closed tab, a missing offscreen document)
       "no-empty": ["error", { allowEmptyCatch: true }]
     }
+  },
+  {
+    // Runs in the AudioWorklet scope, not a window
+    files: ["public/pcm-worklet.js"],
+    languageOptions: { globals: { AudioWorkletProcessor: "readonly", registerProcessor: "readonly" } }
   }
 );
