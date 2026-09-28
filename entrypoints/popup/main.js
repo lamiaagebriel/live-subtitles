@@ -1,8 +1,8 @@
 import { browser } from "wxt/browser";
 import { LANGUAGES } from "@/lib/languages";
 import * as STYLE from "@/lib/style";
+import { DEFAULTS } from "@/lib/settings";
 
-const DEFAULTS = { provider: "groq", apiKey: "", sourceLang: "auto", targetLang: "none", showOriginal: false, popupMode: "live", styleOpen: false, ...STYLE.DEFAULTS };
 const RANGE_IDS = ["fontSize", "position", "width", "bgOpacity"];
 const VALUE_IDS = ["textColor", "bgColor", "origColor", "fontFamily", "edge"];
 const PRESETS = {

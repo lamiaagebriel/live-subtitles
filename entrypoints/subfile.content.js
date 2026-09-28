@@ -3,6 +3,9 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 import { LANGUAGES } from "@/lib/languages";
 import * as S from "@/lib/style";
 import * as P from "@/lib/subparse";
+import { SUBFILE_DEFAULTS as SETTING_DEFAULTS } from "@/lib/settings";
+import { createBox, lineEl as makeLine, mountBox, placeBox, onFullscreenChange } from "@/lib/overlay";
+import { findMainVideo } from "@/lib/video";
 
 // "Subtitle file" mode: shows a loaded .srt/.vtt/.ass file perfectly synced to the video.
 // Injected into every frame of the tab. The top frame shows the control panel;
@@ -26,7 +29,6 @@ export default defineContentScript({
 
     // ---------- shared state (every frame) ----------
     let cues = [], fileName = "", offset = 0, hidden = false;
-    const SETTING_DEFAULTS = { ...S.DEFAULTS, targetLang: "none", showOriginal: false };
     let settings = { ...SETTING_DEFAULTS };
     let video = null, lastPick = -1e9, raf = 0, lastTimeSent = 0;
     let box = null, lastKey = "", toast = "", toastUntil = 0;
@@ -120,14 +122,7 @@ export default defineContentScript({
 
     // ---------- video + rendering ----------
     function pickVideo() {
-      let best = null, bestScore = 0;
-      for (const v of document.querySelectorAll("video")) {
-        const r = v.getBoundingClientRect();
-        const area = Math.max(0, r.width) * Math.max(0, r.height);
-        if (area < 40000) continue;
-        const score = area * (v.paused ? 1 : 2);
-        if (score > bestScore) { best = v; bestScore = score; }
-      }
+      const best = findMainVideo();
       if (best !== video) { clearNative(); video = best; lastKey = ""; }
     }
 
@@ -168,29 +163,12 @@ export default defineContentScript({
     }
 
     function ensureBox() {
-      if (!box) {
-        box = document.createElement("div");
-        box.setAttribute("dir", "auto");
-        box.style.cssText = "all: initial;";
-        Object.assign(box.style, {
-          position: "fixed", left: "50%", bottom: "10%", transform: "translateX(-50%)",
-          zIndex: "2147483647", pointerEvents: "none", textAlign: "center", display: "none",
-          lineHeight: "1.35"
-        });
-      }
-      const fs = document.fullscreenElement || document.webkitFullscreenElement;
-      const parent = fs && fs.tagName !== "VIDEO" ? fs : document.documentElement;
-      if (box.parentNode !== parent) parent.appendChild(box);
+      if (!box) box = createBox();
+      mountBox(box);
     }
 
     function lineEl(text, kind) {
-      const wrap = document.createElement("div");
-      const span = document.createElement("span");
-      span.textContent = text;
-      span.setAttribute("dir", "auto");
-      Object.assign(span.style, S.lineStyle(settings, kind));
-      wrap.appendChild(span);
-      return wrap;
+      return makeLine(text, kind, settings);
     }
 
     // Look of the browser's own subtitle display (bare-video fullscreen)
@@ -229,10 +207,7 @@ export default defineContentScript({
       if (r.bottom < 0 || r.top > vh) { box.style.visibility = "hidden"; return; }
       box.style.visibility = "visible";
       const scale = Math.min(2.2, Math.max(0.75, r.height / 480));
-      box.style.fontSize = Math.round((settings.fontSize || 24) * scale) + "px";
-      box.style.left = r.left + r.width / 2 + "px";
-      box.style.bottom = Math.min(Math.max(4, vh - r.bottom + r.height * (settings.position / 100)), vh - 40) + "px";
-      box.style.maxWidth = Math.max(200, r.width * (settings.width / 100)) + "px";
+      placeBox(box, r, settings, Math.round((settings.fontSize || 24) * scale));
     }
 
     // When the <video> element itself goes fullscreen nothing can be drawn over it,
@@ -259,8 +234,7 @@ export default defineContentScript({
       v.__liveSubsCue = null; v.__liveSubsText = "";
       v.__liveSubsTrack.mode = "disabled";
     }
-    document.addEventListener("fullscreenchange", () => { lastKey = ""; });
-    document.addEventListener("webkitfullscreenchange", () => { lastKey = ""; });
+    onFullscreenChange(() => { lastKey = ""; });
 
     // ---------- translation (a few lines ahead, cached) ----------
     function ensureTranslated(from) {

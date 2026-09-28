@@ -1,6 +1,8 @@
 import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import * as S from "@/lib/style";
+import { createBox, lineEl, mountBox, placeBox, onFullscreenChange } from "@/lib/overlay";
+import { findMainVideo } from "@/lib/video";
 
 // Live (AI) mode: draws the subtitle box over the video (and inside fullscreen players).
 export default defineContentScript({
@@ -9,7 +11,7 @@ export default defineContentScript({
     if (window.__liveSubsLoaded) return;
     window.__liveSubsLoaded = true;
 
-    let style = { ...S.DEFAULTS }, hideTimer = null, posTimer = null;
+    let style = { ...S.DEFAULTS }, hideTimer = null;
     const lines = [];
 
     browser.storage.local.get(S.DEFAULTS).then((s) => { style = s; render(); });
@@ -20,52 +22,23 @@ export default defineContentScript({
       if (changed) render();
     });
 
-    const box = document.createElement("div");
+    const box = createBox();
     box.id = "live-subs-overlay";
-    box.setAttribute("dir", "auto");
-    box.style.cssText = "all: initial;";
-    Object.assign(box.style, {
-      position: "fixed", left: "50%", bottom: "10%", transform: "translateX(-50%)",
-      zIndex: "2147483647", pointerEvents: "none", textAlign: "center", display: "none"
-    });
-
-    function lineEl(text, kind, color) {
-      const wrap = document.createElement("div");
-      const span = document.createElement("span");
-      span.textContent = text;
-      span.setAttribute("dir", "auto");
-      Object.assign(span.style, S.lineStyle(style, kind, color));
-      wrap.appendChild(span);
-      return wrap;
-    }
-
-    function biggestVideo() {
-      let best = null, bestArea = 40000;
-      for (const v of document.querySelectorAll("video")) {
-        const r = v.getBoundingClientRect();
-        const area = Math.max(0, r.width) * Math.max(0, r.height);
-        if (area > bestArea) { best = v; bestArea = area; }
-      }
-      return best;
-    }
 
     // Sit over the video when there is one; otherwise use the whole window
     function position() {
-      const v = biggestVideo();
+      const v = findMainVideo();
       const vh = window.innerHeight;
       let r = v ? v.getBoundingClientRect() : null;
       if (!r || r.bottom < 0 || r.top > vh) r = { left: 0, width: window.innerWidth, top: 0, bottom: vh, height: vh };
-      box.style.fontSize = (style.fontSize || 24) + "px";
-      box.style.left = r.left + r.width / 2 + "px";
-      box.style.bottom = Math.min(Math.max(4, vh - r.bottom + r.height * (style.position / 100)), vh - 40) + "px";
-      box.style.maxWidth = Math.max(200, r.width * (style.width / 100)) + "px";
+      placeBox(box, r, style, style.fontSize || 24);
     }
 
     function render() {
       box.replaceChildren();
       for (const l of lines) {
-        if (l.original) box.appendChild(lineEl(l.original, "original"));
-        box.appendChild(lineEl(l.text, l.kind || "main", l.color));
+        if (l.original) box.appendChild(lineEl(l.original, "original", style));
+        box.appendChild(lineEl(l.text, l.kind || "main", style, l.color));
       }
       box.style.display = lines.length ? "block" : "none";
       if (lines.length) position();
@@ -74,28 +47,22 @@ export default defineContentScript({
     function show(text, original = null, kind = "main", color, keepMs = 9000) {
       lines.push({ text, original, kind, color });
       while (lines.length > 2) lines.shift();
-      attach();
+      mountBox(box);
       render();
       clearTimeout(hideTimer);
       hideTimer = setTimeout(() => { lines.length = 0; render(); }, keepMs);
     }
 
-    function attach() {
-      const fs = document.fullscreenElement || document.webkitFullscreenElement;
-      const host = fs && fs.tagName !== "VIDEO" ? fs : document.documentElement;
-      if (box.parentNode !== host) host.appendChild(box);
-    }
-    document.addEventListener("fullscreenchange", () => { attach(); render(); });
-    document.addEventListener("webkitfullscreenchange", () => { attach(); render(); });
+    onFullscreenChange(() => { mountBox(box); render(); });
     window.addEventListener("resize", () => lines.length && position());
     window.addEventListener("scroll", () => lines.length && position(), true);
-    attach();
+    mountBox(box);
 
     browser.runtime.onMessage.addListener((msg) => {
       if (msg.type === "subtitle") show(msg.text, msg.original);
       else if (msg.type === "status") show(msg.text, null, "info", "#9fb6ff", 4000);
       else if (msg.type === "error") show("⚠ " + msg.text, null, "info", "#ff9a9a", 7000);
-      else if (msg.type === "remove") { lines.length = 0; clearTimeout(hideTimer); clearInterval(posTimer); box.remove(); }
+      else if (msg.type === "remove") { lines.length = 0; clearTimeout(hideTimer); box.remove(); }
     });
   }
 });

@@ -1,4 +1,5 @@
 import { browser } from "wxt/browser";
+import { translateText } from "@/lib/translate";
 
 // Captures tab audio, cuts it into short chunks, transcribes each chunk,
 // optionally translates, and sends the text back to be shown on the page.
@@ -95,7 +96,7 @@ async function handleChunk(blob) {
   let shown = text, original = null;
   if (settings.targetLang && settings.targetLang !== "none") {
     try {
-      shown = await translate(text, settings.targetLang);
+      shown = await translateText(text, settings.targetLang);
       if (settings.showOriginal && shown !== text) original = text;
     } catch {
       shown = text; // fall back to original if translation fails
@@ -130,11 +131,3 @@ async function transcribe(blob) {
   return (await res.json()).text || "";
 }
 
-async function translate(text, target) {
-  const url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&dt=t&tl="
-    + encodeURIComponent(target) + "&q=" + encodeURIComponent(text);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("translate " + res.status);
-  const data = await res.json();
-  return data[0].map((seg) => seg[0]).join("");
-}

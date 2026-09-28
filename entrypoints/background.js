@@ -1,7 +1,7 @@
 import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
-
-const DEFAULTS = { provider: "groq", apiKey: "", sourceLang: "auto", targetLang: "none", showOriginal: false, fontSize: 24 };
+import { LIVE_DEFAULTS } from "@/lib/settings";
+import { translateBatch } from "@/lib/translate";
 
 async function getActiveTabId() {
   const { activeTabId } = await browser.storage.session.get("activeTabId");
@@ -29,14 +29,13 @@ function toTab(tabId, msg) {
 
 // ---------- Live (AI) mode ----------
 async function start(tabId, streamId) {
-  const settings = await browser.storage.local.get(DEFAULTS);
+  const settings = await browser.storage.local.get(LIVE_DEFAULTS);
   await browser.scripting.executeScript({ target: { tabId }, files: ["/content-scripts/live-overlay.js"] });
   await ensureOffscreen();
   await browser.runtime.sendMessage({ target: "offscreen", type: "start", streamId, settings });
   await browser.storage.session.set({ activeTabId: tabId });
   browser.action.setBadgeText({ text: "ON", tabId });
   browser.action.setBadgeBackgroundColor({ color: "#4f7cff" });
-  toTab(tabId, { type: "settings", settings });
   toTab(tabId, { type: "status", text: "🎧 Listening…" });
 }
 
@@ -60,25 +59,6 @@ async function openSubfile(tabId) {
     await browser.scripting.executeScript({ target: { tabId }, files: SUBFILE_SCRIPTS });
   }
   await browser.tabs.sendMessage(tabId, { type: "subfile-panel" }, { frameId: 0 });
-}
-
-// ---------- Translation (shared) ----------
-async function translateText(text, target) {
-  const url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&dt=t&tl="
-    + encodeURIComponent(target) + "&q=" + encodeURIComponent(text);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("translate " + res.status);
-  const data = await res.json();
-  return data[0].map((seg) => seg[0]).join("");
-}
-
-async function translateBatch(texts, target) {
-  const flat = texts.map((t) => t.replace(/\s*\n\s*/g, " "));
-  try {
-    const parts = (await translateText(flat.join("\n"), target)).split("\n").map((s) => s.trim());
-    if (parts.length === texts.length && parts.every(Boolean)) return parts;
-  } catch {}
-  return Promise.all(flat.map((t) => translateText(t, target).catch(() => t)));
 }
 
 export default defineBackground(() => {
@@ -118,9 +98,8 @@ export default defineBackground(() => {
     if (area !== "local") return;
     const tabId = await getActiveTabId();
     if (!tabId) return;
-    const settings = await browser.storage.local.get(DEFAULTS);
+    const settings = await browser.storage.local.get(LIVE_DEFAULTS);
     browser.runtime.sendMessage({ target: "offscreen", type: "settings", settings }).catch(() => {});
-    toTab(tabId, { type: "settings", settings });
   });
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
