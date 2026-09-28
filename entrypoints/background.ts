@@ -88,7 +88,9 @@ async function start(tabId: number, streamId: string) {
     await sendToOffscreen({ target: "offscreen", type: "start", streamId, settings });
     await injectLiveOverlay(tabId);
   } catch (e) {
-    await browser.storage.session.remove(["activeTabId", "liveMuted"]);
+    // Never leave a capture running behind a failed start: the next Start would be refused
+    // ("Cannot capture a tab with an active stream")
+    await stop().catch(() => {});
     throw e;
   }
   browser.action.setBadgeText({ text: "ON", tabId });

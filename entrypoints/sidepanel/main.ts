@@ -145,6 +145,17 @@ input("liveMute").onchange = () => {
   sendToBackground({ type: "live-mute", muted: input("liveMute").checked }).catch(() => {});
 };
 
+// A capture that was just stopped can take a moment to be released: try once more before giving up
+async function getStreamId(tabId: number): Promise<string> {
+  try {
+    return await browser.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  } catch (e) {
+    if (!/active stream/i.test(errorText(e))) throw e;
+    await new Promise((r) => setTimeout(r, 600));
+    return browser.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  }
+}
+
 $("toggle").addEventListener("click", async () => {
   saveLiveSettings();
   const activeTabId = await getActiveTabId();
@@ -158,9 +169,10 @@ $("toggle").addEventListener("click", async () => {
   if (isRestricted(tab) || tab?.id === undefined) return setStatus("Open a web page with a video first.", true);
 
   try {
-    if (activeTabId) await sendToBackground({ type: "stop" });
     setStatus("Starting…");
-    const streamId = await browser.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    // Release any capture still running (another tab, or one left over): Chrome allows one per tab
+    await sendToBackground({ type: "stop" }).catch(() => {});
+    const streamId = await getStreamId(tab.id);
     const res = await sendToBackground({ type: "start", tabId: tab.id, streamId });
     if (res && "error" in res) throw new Error(res.error);
     setStatus("Listening. Play the video; subtitles appear after a few seconds.");
@@ -169,6 +181,8 @@ $("toggle").addEventListener("click", async () => {
     // Chrome only lets an extension capture a tab after you click its icon on that tab
     if (/invoked|activeTab/i.test(msg)) {
       setStatus("Chrome needs one click on the extension icon while this tab is open. Click the 🎬 icon in the toolbar, then press Start again.", true);
+    } else if (/active stream/i.test(msg)) {
+      setStatus("Something else is already capturing this tab: another extension (a recorder or translator), or sharing this tab in Meet, Zoom or Discord. Stop that, then press Start again.", true);
     } else {
       setStatus("Couldn't start: " + msg, true);
     }

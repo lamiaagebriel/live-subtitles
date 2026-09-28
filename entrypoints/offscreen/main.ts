@@ -70,6 +70,16 @@ async function startCapture(streamId: string, s: LiveSettings) {
     return send({ type: "error", text: "Could not capture tab audio: " + errorText(e) });
   }
 
+  try {
+    await setUpAudio(stream);
+  } catch (e) {
+    stopCapture(); // release the tab, or the next Start is refused
+    return send({ type: "error", text: "Could not process the tab's audio: " + errorText(e) });
+  }
+  running = true;
+}
+
+async function setUpAudio(stream: MediaStream) {
   // Keep the video audible for the user (tab capture mutes it otherwise)
   audioCtx = new AudioContext();
   const ctx = audioCtx;
@@ -86,8 +96,6 @@ async function startCapture(streamId: string, s: LiveSettings) {
   source.connect(tap).connect(mute).connect(ctx.destination);
   chunker = new Chunker({ sampleRate: ctx.sampleRate, silenceRms: SILENCE_RMS });
   tap.port.onmessage = (e: MessageEvent<Float32Array>) => onBlock(e.data, ctx.sampleRate);
-
-  running = true;
 }
 
 function stopCapture() {
