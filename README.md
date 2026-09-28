@@ -6,10 +6,20 @@ Subtitles for any video in Chrome (YouTube, Facebook, course sites, news sites, 
 - **Subtitle file**: load your own .srt / .vtt / .ass / .ssa file. It stays in sync when you pause, jump, rewind or change speed.
 
 ## Install (Chrome, Edge, Brave)
-1. Unzip this folder.
-2. Open `chrome://extensions` and turn on **Developer mode** (top right).
-3. Click **Load unpacked** and pick the `live-subtitles` folder.
-4. Pin the extension from the puzzle-piece icon.
+The extension is built from TypeScript with [WXT](https://wxt.dev), so build it first (needs Node.js 22+):
+
+1. `npm install`
+2. `npm run build`
+3. Open `chrome://extensions` and turn on **Developer mode** (top right).
+4. Click **Load unpacked** and pick the **`.output/chrome-mv3`** folder (not the project folder).
+5. Pin the extension from the puzzle-piece icon.
+
+After changing the code, run `npm run build` again and click the reload icon on the extension card.
+
+## Development
+- `npm run dev`: opens Chrome with the extension loaded and reloads it when files change
+- `npm run typecheck` / `npm run lint`: TypeScript and ESLint checks
+- `npm run zip`: packages the extension for the Chrome Web Store
 
 ## Subtitle file mode (no API key needed)
 1. Open the video page, click the extension, choose the **📄 Subtitle file** tab, then **Open subtitle file panel on this tab**.
