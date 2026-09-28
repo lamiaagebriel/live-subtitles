@@ -3,6 +3,7 @@ import { defineContentScript } from "wxt/utils/define-content-script";
 import * as S from "@/lib/style";
 import type { LineKind, StyleSettings } from "@/lib/style";
 import type { LiveOverlayMessage } from "@/lib/messages";
+import { getStyle, onStyleChanged } from "@/lib/settings";
 import { createBox, lineEl, mountBox, placeBox, onFullscreenChange, type Rect } from "@/lib/overlay";
 import { findMainVideo } from "@/lib/video";
 
@@ -28,15 +29,9 @@ export default defineContentScript({
     let hideTimer: ReturnType<typeof setTimeout> | undefined;
     const lines: Line[] = [];
 
-    browser.storage.local.get<StyleSettings>(S.DEFAULTS).then((s) => { style = s; render(); });
-    browser.storage.onChanged.addListener((ch, area) => {
-      if (area !== "local") return;
-      let changed = false;
-      for (const k of S.keys) {
-        if (ch[k]) { style = { ...style, [k]: ch[k].newValue }; changed = true; }
-      }
-      if (changed) render();
-    });
+    // AI subtitles have their own style (edited in the side panel)
+    getStyle("live").then((s) => { style = s; render(); });
+    onStyleChanged("live", (s) => { style = s; render(); });
 
     const box = createBox();
     box.id = "live-subs-overlay";

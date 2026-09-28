@@ -1,8 +1,10 @@
 // Every message sent through chrome.runtime / chrome.tabs messaging.
 //
-//   popup ──start/stop/subfile-open──▶ background ──start/stop/settings──▶ offscreen
+//   side panel ──start/stop/subfile-*──▶ background ──start/stop/settings──▶ offscreen
 //   offscreen ──subtitle/status/error──▶ background ──▶ live overlay (tab)
-//   subfile (any frame) ──subfile-broadcast──▶ background ──▶ subfile (every frame of the tab)
+//   background ──subfile-cues/offset/…──▶ subfile script (every frame of the tab)
+//   subfile script ──subfile-load (drop) / subfile-offset (G/H keys)──▶ background
+//   background ──subfile-changed──▶ side panel
 import { browser } from "wxt/browser";
 import type { Cue } from "./subparse";
 import type { LiveSettings } from "./settings";
@@ -22,30 +24,49 @@ export type OffscreenMessage = { target: "offscreen" } & (
   | { type: "settings"; settings: LiveSettings }
 );
 
-// Between the frames of a tab in subtitle-file mode (relayed by the background)
-export type SubfileMessage =
-  | { type: "subfile-panel" }
-  | { type: "subfile-cues"; cues: Cue[]; name: string; offset: number }
+// Background / side panel → subtitle-file script in every frame of a tab
+export type SubfileTabMessage =
+  | { type: "subfile-cues"; cues: Cue[]; offset: number; hidden: boolean }
   | { type: "subfile-offset"; offset: number }
   | { type: "subfile-hidden"; hidden: boolean }
-  | { type: "subfile-sync-now"; index: number }
-  | { type: "subfile-time"; t: number; paused: boolean; rate: number }
-  | { type: "subfile-close" };
+  | { type: "subfile-close" }
+  | { type: "subfile-sync-now"; index: number } // the frame playing the video sets the delay so cue `index` starts now
+  | { type: "subfile-time-query" }; // answered only by the frame playing the video, with PlayerTime
 
-// Requests the background handles
+export interface PlayerTime { t: number; paused: boolean }
+
+// What the side panel shows about the loaded file
+export interface SubfileInfo {
+  name: string;
+  encoding: string;
+  offset: number;
+  hidden: boolean;
+  cues: Cue[];
+}
+
+// Requests the background handles. `tabId` is omitted when a content script sends it (the sender's tab is used).
 export type BackgroundMessage =
   | { type: "start"; tabId: number; streamId: string }
   | { type: "stop" }
-  | { type: "subfile-open"; tabId: number }
-  | { type: "subfile-broadcast"; payload: SubfileMessage }
+  | { type: "subfile-attach"; tabId: number }
+  | { type: "subfile-load"; tabId?: number; name: string; data: string } // data: file bytes as base64
+  | { type: "subfile-encoding"; tabId: number; encoding: string }
+  | { type: "subfile-offset"; tabId?: number; offset: number }
+  | { type: "subfile-hidden"; tabId: number; hidden: boolean }
+  | { type: "subfile-close"; tabId: number }
+  | { type: "subfile-get"; tabId: number }
   | { type: "translate-batch"; texts: string[]; lang: string }
   | LiveTextMessage;
 
+// Background → side panel
+export type PanelMessage = { type: "subfile-changed"; tabId: number };
+
 export type Reply = { ok: true } | { error: string };
+export type LoadReply = { ok: true; count: number } | { error: string };
 export type TranslateReply = { texts: string[] } | { error: string };
 
 // Anything the background's onMessage listener can receive
-export type AnyMessage = BackgroundMessage | OffscreenMessage;
+export type AnyMessage = BackgroundMessage | OffscreenMessage | PanelMessage;
 
 // Typed senders, so every message matches one of the shapes above
 
@@ -57,8 +78,10 @@ export function sendToOffscreen(msg: OffscreenMessage): Promise<unknown> {
   return browser.runtime.sendMessage<OffscreenMessage>(msg);
 }
 
-export function sendToTab(tabId: number, msg: LiveOverlayMessage | SubfileMessage, frameId?: number): Promise<unknown> {
-  return frameId === undefined
-    ? browser.tabs.sendMessage(tabId, msg)
-    : browser.tabs.sendMessage(tabId, msg, { frameId });
+export function sendToPanel(msg: PanelMessage): Promise<unknown> {
+  return browser.runtime.sendMessage<PanelMessage>(msg);
+}
+
+export function sendToTab<R = unknown>(tabId: number, msg: LiveOverlayMessage | SubfileTabMessage): Promise<R> {
+  return browser.tabs.sendMessage(tabId, msg);
 }
