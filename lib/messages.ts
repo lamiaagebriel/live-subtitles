@@ -1,7 +1,9 @@
 // Every message sent through chrome.runtime / chrome.tabs messaging.
 //
 //   side panel ──start/stop/subfile-*──▶ background ──start/stop/settings──▶ offscreen
-//   offscreen ──subtitle/status/error──▶ background ──▶ live overlay (tab)
+//   offscreen ──subtitle/status/error/live-covered──▶ background ──▶ live overlay (the frame playing the video)
+//   offscreen ──live-time-query──▶ background ──▶ live overlay, which answers with LiveTime
+//   live overlay ──live-video-frame──▶ background (which frame of the tab plays the video)
 //   background ──subfile-cues/offset/…──▶ subfile script (every frame of the tab)
 //   subfile script ──subfile-load (drop) / subfile-offset (G/H keys)──▶ background
 //   background ──subfile-changed──▶ side panel
@@ -9,13 +11,23 @@ import { browser } from "wxt/browser";
 import type { Cue } from "./subparse";
 import type { LiveSettings } from "./settings";
 
-// Live mode text shown on the page (offscreen → background → live overlay)
+// Where a live subtitle sits in the video: seconds of video time, for one video
+export interface LiveTiming { videoKey: string; start: number; end: number }
+
+// Live mode messages for the page (offscreen → background → live overlay)
 export type LiveTextMessage =
-  | { type: "subtitle"; text: string; original: string | null }
+  // source: what Whisper heard; translated: the same line in `lang` (null when not translating)
+  | { type: "subtitle"; source: string; translated: string | null; lang: string; timing: LiveTiming | null }
+  | { type: "live-covered"; timing: LiveTiming } // this stretch was handled but had no words
   | { type: "status"; text: string }
   | { type: "error"; text: string };
 
-export type LiveOverlayMessage = LiveTextMessage | { type: "remove" };
+// The video frame's answer to live-time-query. `covered`: [from, t] was already transcribed.
+export interface LiveTime { t: number; paused: boolean; rate: number; videoKey: string; covered: boolean }
+
+export type LiveTimeQuery = { type: "live-time-query"; from: number | null };
+
+export type LiveOverlayMessage = LiveTextMessage | LiveTimeQuery | { type: "remove" };
 
 // Background → offscreen document
 export type OffscreenMessage = { target: "offscreen" } & (
@@ -56,6 +68,8 @@ export type BackgroundMessage =
   | { type: "subfile-close"; tabId: number }
   | { type: "subfile-get"; tabId: number }
   | { type: "translate-batch"; texts: string[]; lang: string }
+  | { type: "live-video-frame"; area: number } // from a content script: its main video's size (0 = none)
+  | LiveTimeQuery // from the offscreen document; answered with LiveTime or null
   | LiveTextMessage;
 
 // Background → side panel
@@ -82,6 +96,7 @@ export function sendToPanel(msg: PanelMessage): Promise<unknown> {
   return browser.runtime.sendMessage<PanelMessage>(msg);
 }
 
-export function sendToTab<R = unknown>(tabId: number, msg: LiveOverlayMessage | SubfileTabMessage): Promise<R> {
-  return browser.tabs.sendMessage(tabId, msg);
+// Without frameId the message goes to every frame of the tab
+export function sendToTab<R = unknown>(tabId: number, msg: LiveOverlayMessage | SubfileTabMessage, frameId?: number): Promise<R> {
+  return frameId === undefined ? browser.tabs.sendMessage(tabId, msg) : browser.tabs.sendMessage(tabId, msg, { frameId });
 }

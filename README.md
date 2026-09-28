@@ -58,8 +58,9 @@ The speech recognition uses Whisper. Groq offers it with a free tier:
 4. Press **Stop subtitles** when done.
 
 ## Notes
-- Subtitles lag the speech by a few seconds, because audio is sent in 5-second pieces.
-- Words split across two pieces may occasionally be misheard.
+- On a first watch, AI subtitles come about 2–3 seconds after the speech: audio is sent in short pieces (1.5–4 s), cut at pauses.
+- AI subtitles are remembered by video time while the page is open. Rewind and they appear instantly, exactly when the words are spoken,
+  and that part is not sent to the speech service again. Nothing is saved to disk; closing or reloading the page forgets them.
 - Translation uses Google Translate's free public endpoint.
 - In fullscreen, subtitles show inside most players (YouTube, etc.). On sites that fullscreen the bare video element, they only show in normal/theater mode.
 - Your API key is stored only in your browser. Audio is sent to the provider you choose for transcription.

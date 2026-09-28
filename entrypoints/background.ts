@@ -6,7 +6,7 @@ import * as P from "@/lib/subparse";
 import { fromBase64 } from "@/lib/bytes";
 import {
   sendToOffscreen, sendToPanel, sendToTab,
-  type AnyMessage, type LiveOverlayMessage, type SubfileInfo, type SubfileTabMessage
+  type AnyMessage, type LiveOverlayMessage, type LiveTime, type SubfileInfo, type SubfileTabMessage
 } from "@/lib/messages";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -32,12 +32,51 @@ async function closeOffscreen() {
   if (contexts.length) await browser.offscreen.closeDocument();
 }
 
-function toTab(tabId: number | null, msg: LiveOverlayMessage) {
-  if (tabId) sendToTab(tabId, msg).catch(() => {});
+// The frame of the live tab that plays the video (videos in embedded players live in iframes).
+// Frames report their main video's size every few seconds; the biggest recent one wins.
+interface VideoFrame { frameId: number; area: number; at: number }
+
+async function getVideoFrame(tabId: number): Promise<VideoFrame | null> {
+  const key = "liveFrame:" + tabId;
+  const stored = await browser.storage.session.get<Record<string, VideoFrame | undefined>>(key);
+  return stored[key] ?? null;
 }
 
-function injectLiveOverlay(tabId: number) {
-  return browser.scripting.executeScript({ target: { tabId }, files: ["/content-scripts/live-overlay.js"] });
+async function reportVideoFrame(tabId: number, frameId: number, area: number) {
+  const cur = await getVideoFrame(tabId);
+  const now = Date.now();
+  const key = "liveFrame:" + tabId;
+  if (area <= 0) {
+    if (cur?.frameId === frameId) await browser.storage.session.remove(key);
+    return;
+  }
+  if (!cur || cur.frameId === frameId || area > cur.area || now - cur.at > 5000) {
+    await browser.storage.session.set({ [key]: { frameId, area, at: now } satisfies VideoFrame });
+  }
+}
+
+// Live messages go to the video's frame; without one, to the top frame ("remove" goes to all frames)
+async function toTab(tabId: number | null, msg: LiveOverlayMessage) {
+  if (!tabId) return;
+  const frame = msg.type === "remove" ? undefined : (await getVideoFrame(tabId))?.frameId ?? 0;
+  await sendToTab(tabId, msg, frame).catch(() => {});
+}
+
+async function queryLiveTime(msg: LiveOverlayMessage & { type: "live-time-query" }): Promise<LiveTime | null> {
+  const tabId = await getActiveTabId();
+  const frame = tabId && (await getVideoFrame(tabId));
+  if (!tabId || !frame) return null;
+  return (await sendToTab<LiveTime | undefined>(tabId, msg, frame.frameId).catch(() => undefined)) ?? null;
+}
+
+async function injectLiveOverlay(tabId: number) {
+  const files = ["/content-scripts/live-overlay.js"] as const;
+  try {
+    // All frames, so a video inside an embedded player gets its subtitles drawn over it
+    await browser.scripting.executeScript({ target: { tabId, allFrames: true }, files: [...files] });
+  } catch {
+    await browser.scripting.executeScript({ target: { tabId }, files: [...files] });
+  }
 }
 
 async function start(tabId: number, streamId: string) {
@@ -55,8 +94,11 @@ async function stop() {
   const tabId = await getActiveTabId();
   try { await sendToOffscreen({ target: "offscreen", type: "stop" }); } catch {}
   await closeOffscreen();
-  toTab(tabId, { type: "remove" });
-  if (tabId) browser.action.setBadgeText({ text: "", tabId }).catch(() => {});
+  await toTab(tabId, { type: "remove" });
+  if (tabId) {
+    browser.action.setBadgeText({ text: "", tabId }).catch(() => {});
+    await browser.storage.session.remove("liveFrame:" + tabId);
+  }
   await browser.storage.session.remove("activeTabId");
 }
 
@@ -252,8 +294,15 @@ export default defineBackground(() => {
       case "translate-batch":
         translateBatch(msg.texts, msg.lang).then((texts) => sendResponse({ texts }), (e) => sendResponse({ error: errorText(e) }));
         return true;
-      // Live-mode subtitle / status / error messages from the offscreen document → the page
+      case "live-video-frame":
+        if (senderTab !== undefined && sender.frameId !== undefined) reportVideoFrame(senderTab, sender.frameId, msg.area).catch(() => {});
+        return false;
+      case "live-time-query":
+        queryLiveTime(msg).then(sendResponse, () => sendResponse(null));
+        return true;
+      // Live-mode messages from the offscreen document → the page
       case "subtitle":
+      case "live-covered":
       case "status":
       case "error":
         if (sender.url?.includes("offscreen.html")) getActiveTabId().then((tabId) => toTab(tabId, msg));
