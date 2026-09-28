@@ -1,3 +1,5 @@
+import { browser } from "wxt/browser";
+
 // Captures tab audio, cuts it into short chunks, transcribes each chunk,
 // optionally translates, and sends the text back to be shown on the page.
 
@@ -9,7 +11,7 @@ let stream = null, audioCtx = null, analyser = null, levelTimer = null;
 let running = false, settings = null, peak = 0, lastText = "";
 let queue = Promise.resolve();
 
-chrome.runtime.onMessage.addListener((msg) => {
+browser.runtime.onMessage.addListener((msg) => {
   if (msg.target !== "offscreen") return;
   if (msg.type === "start") startCapture(msg.streamId, msg.settings);
   if (msg.type === "stop") stopCapture();
@@ -17,7 +19,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 function send(type, extra) {
-  chrome.runtime.sendMessage({ type, ...extra }).catch(() => {});
+  browser.runtime.sendMessage({ type, ...extra }).catch(() => {});
 }
 
 async function startCapture(streamId, s) {

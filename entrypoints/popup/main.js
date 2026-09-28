@@ -1,4 +1,7 @@
-const STYLE = LiveSubsStyle;
+import { browser } from "wxt/browser";
+import { LANGUAGES } from "@/lib/languages";
+import * as STYLE from "@/lib/style";
+
 const DEFAULTS = { provider: "groq", apiKey: "", sourceLang: "auto", targetLang: "none", showOriginal: false, popupMode: "live", styleOpen: false, ...STYLE.DEFAULTS };
 const RANGE_IDS = ["fontSize", "position", "width", "bgOpacity"];
 const VALUE_IDS = ["textColor", "bgColor", "origColor", "fontFamily", "edge"];
@@ -30,7 +33,7 @@ function setMode(mode) {
   $("toggle").hidden = file;
   $("fileBtn").hidden = !file;
   setStatus("");
-  chrome.storage.local.set({ popupMode: mode });
+  browser.storage.local.set({ popupMode: mode });
 }
 $("tabLive").onclick = () => setMode("live");
 $("tabFile").onclick = () => setMode("file");
@@ -42,7 +45,7 @@ function updateKeyHint() {
 }
 
 async function loadSettings() {
-  const s = await chrome.storage.local.get(DEFAULTS);
+  const s = await browser.storage.local.get(DEFAULTS);
   $("provider").value = s.provider;
   $("apiKey").value = s.apiKey;
   $("sourceLang").value = s.sourceLang;
@@ -93,7 +96,7 @@ function updatePreview() {
 function saveSettings() {
   updateKeyHint();
   updatePreview();
-  chrome.storage.local.set({
+  browser.storage.local.set({
     provider: $("provider").value,
     apiKey: $("apiKey").value.trim(),
     sourceLang: $("sourceLang").value,
@@ -119,10 +122,10 @@ document.querySelectorAll("[data-preset]").forEach((b) => {
   b.onclick = () => { applyStyleToForm({ ...readStyle(), ...PRESETS[b.dataset.preset] }); saveSettings(); };
 });
 $("resetStyle").onclick = () => { applyStyleToForm(STYLE.DEFAULTS); saveSettings(); };
-$("styleBox").addEventListener("toggle", () => chrome.storage.local.set({ styleOpen: $("styleBox").open }));
+$("styleBox").addEventListener("toggle", () => browser.storage.local.set({ styleOpen: $("styleBox").open }));
 
 async function currentTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   return tab;
 }
 
@@ -132,7 +135,7 @@ function isRestricted(tab) {
 }
 
 async function refreshButton() {
-  const { activeTabId } = await chrome.storage.session.get("activeTabId");
+  const { activeTabId } = await browser.storage.session.get("activeTabId");
   const tab = await currentTab();
   const btn = $("toggle");
   if (activeTabId && activeTabId === tab?.id) {
@@ -150,10 +153,10 @@ async function refreshButton() {
 $("toggle").addEventListener("click", async () => {
   saveSettings();
   const tab = await currentTab();
-  const { activeTabId } = await chrome.storage.session.get("activeTabId");
+  const { activeTabId } = await browser.storage.session.get("activeTabId");
 
   if (activeTabId === tab.id) {
-    await chrome.runtime.sendMessage({ type: "stop" });
+    await browser.runtime.sendMessage({ type: "stop" });
     setStatus("Stopped.");
     return refreshButton();
   }
@@ -162,10 +165,10 @@ $("toggle").addEventListener("click", async () => {
   if (isRestricted(tab)) return setStatus("Open a web page with a video first.", true);
 
   try {
-    if (activeTabId) await chrome.runtime.sendMessage({ type: "stop" });
+    if (activeTabId) await browser.runtime.sendMessage({ type: "stop" });
     setStatus("Starting…");
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
-    const res = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, streamId });
+    const streamId = await browser.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    const res = await browser.runtime.sendMessage({ type: "start", tabId: tab.id, streamId });
     if (res?.error) throw new Error(res.error);
     setStatus("Listening. Play the video; subtitles appear after a few seconds.");
   } catch (e) {
@@ -179,7 +182,7 @@ $("fileBtn").addEventListener("click", async () => {
   const tab = await currentTab();
   if (isRestricted(tab)) return setStatus("Open a web page with a video first.", true);
   try {
-    const res = await chrome.runtime.sendMessage({ type: "subfile-open", tabId: tab.id });
+    const res = await browser.runtime.sendMessage({ type: "subfile-open", tabId: tab.id });
     if (res?.error) throw new Error(res.error);
     window.close();
   } catch (e) {

@@ -1,0 +1,19 @@
+{
+  "name": "live-subtitles-anywhere",
+  "description": "Subtitles for any video on any website: live AI subtitles or your own subtitle file.",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "typescript": "~5.9",
+    "wxt": "^0.21.4"
+  }
+}
