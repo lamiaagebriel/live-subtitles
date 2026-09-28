@@ -20,7 +20,7 @@ interface NativeTrack { track: TextTrack; cue: VTTCue | null; text: string }
 
 // "Subtitle file" mode: shows a loaded .srt/.vtt/.ass file perfectly synced to the video.
 // Injected into every frame of the tab; any frame that contains the video draws the subtitles over it.
-// The file itself is chosen in the side panel or dropped onto the page, and kept by the background.
+// The file itself is chosen in the popup or dropped onto the page, and kept by the background.
 export default defineContentScript({
   registration: "runtime",
   main() {

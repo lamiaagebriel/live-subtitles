@@ -247,7 +247,7 @@ async function transcribe(blob: Blob): Promise<string> {
   if (!res.ok) {
     let detail = "";
     try { detail = ((await res.json()) as { error?: { message?: string } }).error?.message || ""; } catch {}
-    if (res.status === 401) throw new ApiError("API key rejected — check it in the side panel.", 401);
+    if (res.status === 401) throw new ApiError("API key rejected — check it in the extension popup.", 401);
     if (res.status === 429) throw new ApiError("Rate limit reached — slowing down for a moment.", 429);
     throw new ApiError(`Transcription failed (${res.status}) ${detail}`, res.status);
   }

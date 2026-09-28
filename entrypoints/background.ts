@@ -183,7 +183,7 @@ function pushCues(tabId: number, file: StoredFile) {
 }
 
 function notifyPanel(tabId: number) {
-  sendToPanel({ type: "subfile-changed", tabId }).catch(() => {}); // no side panel open is fine
+  sendToPanel({ type: "subfile-changed", tabId }).catch(() => {}); // no popup open is fine
 }
 
 async function savedOffset(name: string): Promise<number> {
@@ -264,12 +264,6 @@ async function attachSubfile(tabId: number) {
 
 // ================= wiring =================
 export default defineBackground(() => {
-  // The toolbar icon opens the side panel. Clicking it also grants activeTab,
-  // which live mode needs to capture that tab's audio.
-  browser.action.onClicked.addListener((tab) => {
-    if (tab.windowId !== undefined) browser.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
-  });
-
   browser.runtime.onInstalled.addListener(() => { migrateStyles().catch(() => {}); });
 
   browser.runtime.onMessage.addListener((msg: AnyMessage, sender, sendResponse) => {

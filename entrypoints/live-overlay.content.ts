@@ -79,7 +79,7 @@ export default defineContentScript({
       if (v) onVolume(); // already muted when live mode started
     }
 
-    // AI subtitles have their own style (edited in the side panel)
+    // AI subtitles have their own style (edited in the popup)
     getStyle("live").then((s) => { style = s; lastRender = ""; });
     onStyleChanged("live", (s) => { style = s; lastRender = ""; });
     browser.storage.local.get<TranslationSettings>(TRANSLATION_DEFAULTS).then((s) => { lang = s; lastRender = ""; });

@@ -1,12 +1,12 @@
 // Every message sent through chrome.runtime / chrome.tabs messaging.
 //
-//   side panel ──start/stop/subfile-*──▶ background ──start/stop/settings──▶ offscreen
+//   popup ──start/stop/subfile-*──▶ background ──start/stop/settings──▶ offscreen
 //   offscreen ──subtitle/status/error/live-covered──▶ background ──▶ live overlay (the frame playing the video)
 //   offscreen ──live-time-query──▶ background ──▶ live overlay, which answers with LiveTime
 //   live overlay ──live-video-frame──▶ background (which frame of the tab plays the video)
 //   background ──subfile-cues/offset/…──▶ subfile script (every frame of the tab)
 //   subfile script ──subfile-load (drop) / subfile-offset (G/H keys)──▶ background
-//   background ──subfile-changed──▶ side panel
+//   background ──subfile-changed──▶ popup
 import { browser } from "wxt/browser";
 import type { Cue } from "./subparse";
 import type { LiveSettings } from "./settings";
@@ -39,7 +39,7 @@ export type OffscreenMessage = { target: "offscreen" } & (
   | { type: "output"; muted: boolean } // play the tab's sound or not (capture continues either way)
 );
 
-// Background / side panel → subtitle-file script in every frame of a tab
+// Background / popup → subtitle-file script in every frame of a tab
 export type SubfileTabMessage =
   | { type: "subfile-cues"; cues: Cue[]; offset: number; hidden: boolean }
   | { type: "subfile-offset"; offset: number }
@@ -50,7 +50,7 @@ export type SubfileTabMessage =
 
 export interface PlayerTime { t: number; paused: boolean }
 
-// What the side panel shows about the loaded file
+// What the popup shows about the loaded file
 export interface SubfileInfo {
   name: string;
   encoding: string;
@@ -72,11 +72,11 @@ export type BackgroundMessage =
   | { type: "subfile-get"; tabId: number }
   | { type: "translate-batch"; texts: string[]; lang: string }
   | { type: "live-video-frame"; area: number } // from a content script: its main video's size (0 = none)
-  | { type: "live-mute"; muted: boolean } // from the side panel or the page: mute the sound, keep the subtitles
+  | { type: "live-mute"; muted: boolean } // from the popup or the page: mute the sound, keep the subtitles
   | LiveTimeQuery // from the offscreen document; answered with LiveTime or null
   | LiveTextMessage;
 
-// Background → side panel
+// Background → popup
 export type PanelMessage = { type: "subfile-changed"; tabId: number };
 
 export type Reply = { ok: true } | { error: string };

@@ -29,12 +29,13 @@ export const TRANSLATION_DEFAULTS: TranslationSettings = {
   showOriginal: LIVE_DEFAULTS.showOriginal
 };
 
-// Everything the side panel reads and writes besides the styles
+// Everything the popup reads and writes besides the styles
 export interface PanelSettings extends LiveSettings {
   panelMode: Mode;
+  styleOpen: boolean; // the style section was left open
 }
 
-export const PANEL_DEFAULTS: PanelSettings = { ...LIVE_DEFAULTS, panelMode: "live" };
+export const PANEL_DEFAULTS: PanelSettings = { ...LIVE_DEFAULTS, panelMode: "live", styleOpen: false };
 
 // ---------- subtitle style: one per mode ----------
 export type Mode = "live" | "file";

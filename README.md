@@ -21,16 +21,17 @@ After changing the code, run `npm run build` again and click the reload icon on 
 - `npm run typecheck` / `npm run lint`: TypeScript and ESLint checks
 - `npm run zip`: packages the extension for the Chrome Web Store
 
-## The side panel
-Click the extension icon in the toolbar: a side panel opens next to the page and stays open while you watch.
+## The popup
+Click the extension icon in the toolbar: everything is controlled from the popup that opens under it.
+The video keeps playing while it's open, and style changes show on the video right away.
 Everything is controlled from there, and it follows whichever tab you switch to.
 
 ## Subtitle file mode (no API key needed)
 1. Open the video page, click the extension icon, and pick the **📄 Subtitle file** tab.
-2. Click **Choose subtitle file…**, or drop the .srt / .vtt / .ass / .ssa file onto the side panel or straight onto the video.
+2. Click **Choose subtitle file…**, or drop the .srt / .vtt / .ass / .ssa file straight onto the video.
 3. Play the video. You can jump anywhere and the right line shows.
 4. If the timing is off:
-   - **Delay buttons** (−1s, −0.1, +0.1, +1s) in the side panel, or on the page: **G** = subtitles earlier, **H** = later, hold **Shift** for 1-second steps.
+   - **Delay buttons** (−1s, −0.1, +0.1, +1s) in the popup, or on the page: **G** = subtitles earlier, **H** = later, hold **Shift** for 1-second steps.
    - **Quick sync**: use ◀ ▶ to pick a line, then press **🎯 This line is being said now** the moment you hear it. The delay is fixed for you.
    - The delay is remembered for that file name.
 5. Broken letters (common with old Arabic .srt files)? The encoding is detected automatically, but you can pick it under **Text encoding**.
@@ -38,7 +39,7 @@ Everything is controlled from there, and it follows whichever tab you switch to.
 7. The subtitles come back by themselves if you reload the page. Click **✕ Remove** to take them off.
 
 ## Subtitle style
-AI subtitles and file subtitles each have **their own style**. In the side panel, under **🎨 Subtitle style**, pick
+AI subtitles and file subtitles each have **their own style**. In the popup, open **🎨 Subtitle style** and pick
 **🎧 AI subtitles** or **📄 File subtitles**, then adjust. Every change shows in the preview and on the video right away,
 while it plays:
 - Size, height from the bottom of the video, max line width
@@ -49,7 +50,7 @@ while it plays:
 ## Live mode: get a free API key
 The speech recognition uses Whisper. Groq offers it with a free tier:
 1. Sign up at https://console.groq.com/keys and create a key.
-2. Paste it in the side panel. (An OpenAI key works too — pick "OpenAI Whisper".)
+2. Paste it in the extension popup. (An OpenAI key works too — pick "OpenAI Whisper".)
 
 ## Live mode: use
 1. Open a page with a video and click the extension icon (Chrome only allows capturing a tab's audio after that click).
@@ -57,7 +58,7 @@ The speech recognition uses Whisper. Groq offers it with a free tier:
 3. Play the video. Subtitles appear at the bottom after ~5–7 seconds.
 4. Press **Stop subtitles** when done.
 
-Want to read without hearing it? Mute the player, turn its volume down, or tick **🔇 Mute the video's sound** in the side panel:
+Want to read without hearing it? Mute the player, turn its volume down, or tick **🔇 Mute the video's sound** in the popup:
 the subtitles keep going. (When the player mutes, the extension takes the mute over so it can still hear the audio;
 click the **🔇 Sound off** chip on the video to get the sound back.)
 

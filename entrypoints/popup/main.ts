@@ -180,7 +180,7 @@ $("toggle").addEventListener("click", async () => {
     const msg = errorText(e);
     // Chrome only lets an extension capture a tab after you click its icon on that tab
     if (/invoked|activeTab/i.test(msg)) {
-      setStatus("Chrome needs one click on the extension icon while this tab is open. Click the 🎬 icon in the toolbar, then press Start again.", true);
+      setStatus("Chrome didn't allow capturing this tab. Close this popup, click the 🎬 icon again on this tab, and press Start.", true);
     } else if (/active stream/i.test(msg)) {
       setStatus("Something else is already capturing this tab: another extension (a recorder or translator), or sharing this tab in Meet, Zoom or Discord. Stop that, then press Start again.", true);
     } else {
@@ -232,7 +232,7 @@ input("fileInput").onchange = () => {
   input("fileInput").value = "";
 };
 
-// Drop a file anywhere on the side panel
+// Drop a file onto the popup
 document.addEventListener("dragover", (e) => {
   if (!e.dataTransfer?.types.includes("Files")) return;
   e.preventDefault();
@@ -390,8 +390,13 @@ async function init() {
   field("sourceLang").value = s.sourceLang;
   field("targetLang").value = s.targetLang;
   input("showOriginal").checked = s.showOriginal;
+  $<HTMLDetailsElement>("styleBox").open = s.styleOpen;
   updateKeyHint();
   await refreshTab();
   setMode(s.panelMode);
 }
+$("styleBox").addEventListener("toggle", () => {
+  browser.storage.local.set({ styleOpen: $<HTMLDetailsElement>("styleBox").open } satisfies Partial<PanelSettings>);
+});
+
 init();
