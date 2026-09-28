@@ -4,6 +4,7 @@ import { LIVE_DEFAULTS, type LiveSettings } from "@/lib/settings";
 import { sendToBackground, type LiveTextMessage, type LiveTime, type LiveTiming, type OffscreenMessage } from "@/lib/messages";
 import { Chunker, type Chunk } from "@/lib/chunker";
 import { downsample, encodeWav } from "@/lib/wav";
+import { PROVIDER_BUDGETS, RateBudget } from "@/lib/budget";
 
 // Captures tab audio, cuts it into short chunks at pauses, and transcribes them (optionally translated).
 // Each chunk is stamped with the video time it covers, so the page can keep the subtitles on the video's
@@ -28,14 +29,18 @@ let chunker: Chunker | null = null;
 let running = false, settings: LiveSettings = LIVE_DEFAULTS, lastText = "";
 let chunkStart: Promise<LiveTime | null> | null = null; // video time when the current chunk began
 const waiting: Job[] = [];
-let inFlight = 0;
+let inFlight = 0, pumpTimer: ReturnType<typeof setTimeout> | undefined;
+let budget = new RateBudget(PROVIDER_BUDGETS.groq, performance.now());
 let backoffMs = 0, backoffUntil = 0, errorShown = false;
 
 browser.runtime.onMessage.addListener((msg: OffscreenMessage | { target?: undefined }) => {
   if (msg.target !== "offscreen") return;
   if (msg.type === "start") startCapture(msg.streamId, msg.settings);
   if (msg.type === "stop") stopCapture();
-  if (msg.type === "settings") settings = msg.settings;
+  if (msg.type === "settings") {
+    if (msg.settings.provider !== settings.provider) budget = new RateBudget(PROVIDER_BUDGETS[msg.settings.provider], performance.now());
+    settings = msg.settings;
+  }
 });
 
 function send(msg: LiveTextMessage) {
@@ -51,6 +56,7 @@ function queryTime(from: number | null): Promise<LiveTime | null> {
 
 async function startCapture(streamId: string, s: LiveSettings) {
   settings = s;
+  budget = new RateBudget(PROVIDER_BUDGETS[s.provider], performance.now());
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       // Chrome's non-standard constraint for tab capture streams
@@ -86,6 +92,8 @@ function stopCapture() {
   stream = audioCtx = chunker = null;
   chunkStart = null;
   waiting.length = 0;
+  clearTimeout(pumpTimer);
+  pumpTimer = undefined;
   lastText = "";
   backoffMs = backoffUntil = 0;
   errorShown = false;
@@ -94,7 +102,9 @@ function stopCapture() {
 function onBlock(block: Float32Array, rate: number) {
   if (!running || !chunker) return;
   if (!chunker.started) chunkStart = queryTime(null);
-  const chunk = chunker.push(block);
+  // Only cut speech into a new request when the rate limit has one to spare (queued ones count)
+  const canSend = budget.available(performance.now()) - waiting.length >= 1;
+  const chunk = chunker.push(block, canSend);
   if (!chunk) return;
   const start = chunkStart;
   chunkStart = null;
@@ -121,7 +131,7 @@ async function finishChunk(chunk: Chunk, rate: number, start: Promise<LiveTime |
   enqueue({ chunk, rate, timing, queuedAt: performance.now() });
 }
 
-// ---------- transcription queue: a few at once, never a growing backlog ----------
+// ---------- transcription queue: a few at once, within the rate limit, never a growing backlog ----------
 function enqueue(job: Job) {
   waiting.push(job);
   pump();
@@ -129,9 +139,17 @@ function enqueue(job: Job) {
 
 function pump() {
   while (running && inFlight < MAX_IN_FLIGHT && waiting.length) {
-    const job = waiting.shift()!;
+    const now = performance.now();
     // Too old, or the provider asked us to slow down: drop it (a rewind will send it again)
-    if (performance.now() - job.queuedAt > STALE_MS || performance.now() < backoffUntil) continue;
+    if (now - waiting[0]!.queuedAt > STALE_MS || now < backoffUntil) { waiting.shift(); continue; }
+    // No request left this minute: try again when there is one
+    const wait = budget.waitMs(now);
+    if (wait > 0) {
+      if (!pumpTimer) pumpTimer = setTimeout(() => { pumpTimer = undefined; pump(); }, wait);
+      return;
+    }
+    budget.spend(now);
+    const job = waiting.shift()!;
     inFlight++;
     handleJob(job).finally(() => { inFlight--; pump(); });
   }

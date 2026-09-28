@@ -1,12 +1,15 @@
 // Cuts a stream of audio blocks into short chunks for transcription.
-// A chunk ends at the first short pause once it is long enough, or at a hard limit,
+// A chunk ends at the first short pause once it is long enough, or at a soft limit,
 // so words are rarely split and subtitles arrive a lot sooner than with fixed 5 s pieces.
+// When the caller has no request to spare (rate limits), speech keeps collecting until it has,
+// up to a hard cap; silent chunks can always be cut since they are never sent.
 import { rms } from "./wav";
 
 export interface ChunkerOptions {
   sampleRate: number;
   minSec?: number;     // don't cut before this, even at a pause
-  maxSec?: number;     // always cut here
+  maxSec?: number;     // cut here if a request is available
+  capSec?: number;     // always cut here
   pauseSec?: number;   // this much quiet counts as a pause
   silenceRms?: number; // blocks quieter than this are "quiet"
   leadInSec?: number;  // after a hard cut, repeat this much audio at the start of the next chunk
@@ -23,6 +26,7 @@ export class Chunker {
   private readonly rate: number;
   private readonly minSec: number;
   private readonly maxSec: number;
+  private readonly capSec: number;
   private readonly pauseSec: number;
   private readonly silenceRms: number;
   private readonly leadInSec: number;
@@ -36,6 +40,7 @@ export class Chunker {
     this.rate = o.sampleRate;
     this.minSec = o.minSec ?? 1.5;
     this.maxSec = o.maxSec ?? 4;
+    this.capSec = o.capSec ?? 12;
     this.pauseSec = o.pauseSec ?? 0.25;
     this.silenceRms = o.silenceRms ?? 0.012;
     this.leadInSec = o.leadInSec ?? 0.3;
@@ -46,15 +51,17 @@ export class Chunker {
     return this.length > 0;
   }
 
-  // Adds one block; returns a finished chunk when this block completes one
-  push(block: Float32Array): Chunk | null {
+  // Adds one block; returns a finished chunk when this block completes one.
+  // canSend: false while the rate limit has no request to spare.
+  push(block: Float32Array, canSend = true): Chunk | null {
     this.blocks.push(block);
     this.length += block.length;
     if (rms(block) >= this.silenceRms) { this.loud = true; this.quiet = 0; } else this.quiet += block.length;
 
     const seconds = this.length / this.rate;
-    const atPause = seconds >= this.minSec && this.quiet >= this.pauseSec * this.rate;
-    const hardCut = !atPause && seconds >= this.maxSec;
+    const mayCut = canSend || !this.loud;
+    const atPause = mayCut && seconds >= this.minSec && this.quiet >= this.pauseSec * this.rate;
+    const hardCut = !atPause && ((mayCut && seconds >= this.maxSec) || seconds >= this.capSec);
     if (!atPause && !hardCut) return null;
 
     const own = concat(this.blocks, this.length);
