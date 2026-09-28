@@ -57,6 +57,10 @@ The speech recognition uses Whisper. Groq offers it with a free tier:
 3. Play the video. Subtitles appear at the bottom after ~5–7 seconds.
 4. Press **Stop subtitles** when done.
 
+Want to read without hearing it? Mute the player, turn its volume down, or tick **🔇 Mute the video's sound** in the side panel:
+the subtitles keep going. (When the player mutes, the extension takes the mute over so it can still hear the audio;
+click the **🔇 Sound off** chip on the video to get the sound back.)
+
 ## Notes
 - On a first watch, AI subtitles come about 2–3 seconds after the speech: audio is sent in short pieces (1.5–4 s), cut at pauses.
 - AI subtitles are remembered by video time while the page is open. Rewind and they appear instantly, exactly when the words are spoken,

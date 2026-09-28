@@ -23,17 +23,20 @@ export type LiveTextMessage =
   | { type: "error"; text: string };
 
 // The video frame's answer to live-time-query. `covered`: [from, t] was already transcribed.
-export interface LiveTime { t: number; paused: boolean; rate: number; videoKey: string; covered: boolean }
+// volume: the element's volume (0–1), so quiet audio can be boosted back up before transcription
+export interface LiveTime { t: number; paused: boolean; rate: number; volume: number; videoKey: string; covered: boolean }
 
 export type LiveTimeQuery = { type: "live-time-query"; from: number | null };
 
-export type LiveOverlayMessage = LiveTextMessage | LiveTimeQuery | { type: "remove" };
+// liveMuted: the extension silences the video's sound itself (subtitles keep going)
+export type LiveOverlayMessage = LiveTextMessage | LiveTimeQuery | { type: "remove" } | { type: "live-muted"; muted: boolean };
 
 // Background → offscreen document
 export type OffscreenMessage = { target: "offscreen" } & (
   | { type: "start"; streamId: string; settings: LiveSettings }
   | { type: "stop" }
   | { type: "settings"; settings: LiveSettings }
+  | { type: "output"; muted: boolean } // play the tab's sound or not (capture continues either way)
 );
 
 // Background / side panel → subtitle-file script in every frame of a tab
@@ -69,6 +72,7 @@ export type BackgroundMessage =
   | { type: "subfile-get"; tabId: number }
   | { type: "translate-batch"; texts: string[]; lang: string }
   | { type: "live-video-frame"; area: number } // from a content script: its main video's size (0 = none)
+  | { type: "live-mute"; muted: boolean } // from the side panel or the page: mute the sound, keep the subtitles
   | LiveTimeQuery // from the offscreen document; answered with LiveTime or null
   | LiveTextMessage;
 

@@ -81,13 +81,28 @@ async function injectLiveOverlay(tabId: number) {
 
 async function start(tabId: number, streamId: string) {
   const settings = await browser.storage.local.get<LiveSettings>(LIVE_DEFAULTS);
-  await injectLiveOverlay(tabId);
-  await ensureOffscreen();
-  await sendToOffscreen({ target: "offscreen", type: "start", streamId, settings });
-  await browser.storage.session.set({ activeTabId: tabId });
+  // Recorded first: the page may report a muted video (mute takeover) as soon as the overlay runs
+  await browser.storage.session.set({ activeTabId: tabId, liveMuted: false });
+  try {
+    await ensureOffscreen();
+    await sendToOffscreen({ target: "offscreen", type: "start", streamId, settings });
+    await injectLiveOverlay(tabId);
+  } catch (e) {
+    await browser.storage.session.remove(["activeTabId", "liveMuted"]);
+    throw e;
+  }
   browser.action.setBadgeText({ text: "ON", tabId });
   browser.action.setBadgeBackgroundColor({ color: "#4f7cff" });
   toTab(tabId, { type: "status", text: "🎧 Listening…" });
+}
+
+// Mute the sound but keep capturing it, so the subtitles keep going
+async function setLiveMuted(muted: boolean) {
+  const tabId = await getActiveTabId();
+  if (!tabId) return;
+  await browser.storage.session.set({ liveMuted: muted });
+  await sendToOffscreen({ target: "offscreen", type: "output", muted }).catch(() => {});
+  await toTab(tabId, { type: "live-muted", muted });
 }
 
 async function stop() {
@@ -99,7 +114,7 @@ async function stop() {
     browser.action.setBadgeText({ text: "", tabId }).catch(() => {});
     await browser.storage.session.remove("liveFrame:" + tabId);
   }
-  await browser.storage.session.remove("activeTabId");
+  await browser.storage.session.remove(["activeTabId", "liveMuted"]);
 }
 
 // ================= Subtitle-file mode =================
@@ -297,6 +312,8 @@ export default defineBackground(() => {
       case "live-video-frame":
         if (senderTab !== undefined && sender.frameId !== undefined) reportVideoFrame(senderTab, sender.frameId, msg.area).catch(() => {});
         return false;
+      case "live-mute":
+        return reply(setLiveMuted(msg.muted));
       case "live-time-query":
         queryLiveTime(msg).then(sendResponse, () => sendResponse(null));
         return true;

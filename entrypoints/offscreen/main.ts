@@ -32,11 +32,14 @@ const waiting: Job[] = [];
 let inFlight = 0, pumpTimer: ReturnType<typeof setTimeout> | undefined;
 let budget = new RateBudget(PROVIDER_BUDGETS.groq, performance.now());
 let backoffMs = 0, backoffUntil = 0, errorShown = false;
+let output: GainNode | null = null, muted = false;
+let boost = 1; // the video's volume was turned down: scale the audio back up for transcription
 
 browser.runtime.onMessage.addListener((msg: OffscreenMessage | { target?: undefined }) => {
   if (msg.target !== "offscreen") return;
   if (msg.type === "start") startCapture(msg.streamId, msg.settings);
   if (msg.type === "stop") stopCapture();
+  if (msg.type === "output") setMuted(msg.muted);
   if (msg.type === "settings") {
     if (msg.settings.provider !== settings.provider) budget = new RateBudget(PROVIDER_BUDGETS[msg.settings.provider], performance.now());
     settings = msg.settings;
@@ -71,7 +74,9 @@ async function startCapture(streamId: string, s: LiveSettings) {
   audioCtx = new AudioContext();
   const ctx = audioCtx;
   const source = ctx.createMediaStreamSource(stream);
-  source.connect(ctx.destination);
+  output = ctx.createGain();
+  output.gain.value = muted ? 0 : 1;
+  source.connect(output).connect(ctx.destination);
 
   // Raw samples from the audio thread, cut into chunks with no gaps between them
   await ctx.audioWorklet.addModule(browser.runtime.getURL("/pcm-worklet.js"));
@@ -96,11 +101,21 @@ function stopCapture() {
   pumpTimer = undefined;
   lastText = "";
   backoffMs = backoffUntil = 0;
+  output = null;
+  muted = false;
+  boost = 1;
   errorShown = false;
+}
+
+// What you hear. The captured audio is not affected, so the subtitles keep going while muted.
+function setMuted(m: boolean) {
+  muted = m;
+  if (output) output.gain.value = m ? 0 : 1;
 }
 
 function onBlock(block: Float32Array, rate: number) {
   if (!running || !chunker) return;
+  if (boost !== 1) for (let i = 0; i < block.length; i++) block[i]! *= boost;
   if (!chunker.started) chunkStart = queryTime(null);
   // Only cut speech into a new request when the rate limit has one to spare (queued ones count)
   const canSend = budget.available(performance.now()) - waiting.length >= 1;
@@ -114,6 +129,8 @@ function onBlock(block: Float32Array, rate: number) {
 // Works out which stretch of the video a chunk covers, then queues it (or skips it)
 async function finishChunk(chunk: Chunk, rate: number, start: Promise<LiveTime | null> | null) {
   const s = start && (await start);
+  // Up to 20× louder when the player's volume is low, so quiet speech is still heard
+  boost = s ? Math.min(20, 1 / Math.max(0.05, s.volume)) : 1;
   if (!s) {
     // No video found (audio-only page, or a player we can't see): just show the text when it's ready
     if (chunk.loud) enqueue({ chunk, rate, timing: null, queuedAt: performance.now() });

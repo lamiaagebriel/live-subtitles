@@ -44,6 +44,43 @@ export default defineContentScript({
     const box = createBox();
     box.id = "live-subs-overlay";
 
+    // ---------- sound off, subtitles on ----------
+    // Muting the player would silence the audio we transcribe. So when the player mutes (or its volume
+    // hits 0), we un-mute the element and silence the sound on our side instead (the offscreen playback).
+    let extMuted = false, ignoreVolumeUntil = 0, lastVolume = 1;
+    let watched: HTMLVideoElement | null = null;
+    const chip = document.createElement("button");
+    chip.textContent = "🔇 Sound off · subtitles on — click for sound";
+    chip.style.cssText = "all: initial;";
+    Object.assign(chip.style, {
+      position: "fixed", zIndex: "2147483647", display: "none", cursor: "pointer",
+      font: "600 12px system-ui, sans-serif", color: "#fff", background: "rgba(20, 22, 28, 0.85)",
+      padding: "5px 10px", borderRadius: "999px", border: "1px solid rgba(255,255,255,0.25)"
+    });
+    chip.onclick = (e) => { e.stopPropagation(); sendToBackground({ type: "live-mute", muted: false }).catch(() => {}); };
+
+    function onVolume() {
+      const v = video;
+      if (!v || !active || performance.now() < ignoreVolumeUntil) return;
+      if (v.muted || v.volume === 0) {
+        ignoreVolumeUntil = performance.now() + 300; // our own change below fires volumechange too
+        v.muted = false;
+        if (v.volume === 0) v.volume = lastVolume;
+        if (!extMuted) sendToBackground({ type: "live-mute", muted: true }).catch(() => {});
+      } else {
+        lastVolume = v.volume;
+        if (extMuted) sendToBackground({ type: "live-mute", muted: false }).catch(() => {}); // un-muted in the player
+      }
+    }
+
+    function watchVolume(v: HTMLVideoElement | null) {
+      if (v === watched) return;
+      watched?.removeEventListener("volumechange", onVolume);
+      v?.addEventListener("volumechange", onVolume);
+      watched = v;
+      if (v) onVolume(); // already muted when live mode started
+    }
+
     // AI subtitles have their own style (edited in the side panel)
     getStyle("live").then((s) => { style = s; lastRender = ""; });
     onStyleChanged("live", (s) => { style = s; lastRender = ""; });
@@ -76,6 +113,7 @@ export default defineContentScript({
 
     function pickVideo(now: number) {
       video = findMainVideo();
+      watchVolume(video);
       key = video ? videoKey(video) : "";
       const r = video?.getBoundingClientRect();
       const area = r ? Math.round(r.width * r.height) : 0;
@@ -94,7 +132,7 @@ export default defineContentScript({
           if (!video) return false; // only the frame with the video answers
           const t = video.currentTime;
           sendResponse({
-            t, paused: video.paused, rate: video.playbackRate, videoKey: key,
+            t, paused: video.paused, rate: video.playbackRate, volume: video.muted ? 0 : video.volume, videoKey: key,
             covered: msg.from !== null && timeline(key).isCovered(msg.from, t)
           } satisfies LiveTime);
           return false;
@@ -114,7 +152,15 @@ export default defineContentScript({
           wake();
           toast = { text: "⚠ " + msg.text, color: "#ff9a9a", until: performance.now() + 7000 };
           break;
+        case "live-muted":
+          extMuted = msg.muted;
+          break;
         case "remove":
+          // Live mode is over: the sound comes back through the page, so honour a mute made during it
+          if (extMuted && video) { ignoreVolumeUntil = performance.now() + 300; video.muted = true; }
+          extMuted = false;
+          chip.remove();
+          watchVolume(null);
           active = false;
           untimed = []; toast = null;
           if (raf) cancelAnimationFrame(raf);
@@ -220,6 +266,17 @@ export default defineContentScript({
       const renderKey = JSON.stringify(lines);
       if (renderKey !== lastRender) { lastRender = renderKey; render(lines); }
       if (lines.length) position();
+      placeChip();
+    }
+
+    // The "sound off" chip sits in the top-left corner of the video
+    function placeChip() {
+      const r = extMuted && video ? video.getBoundingClientRect() : null;
+      if (!r || r.bottom < 0 || r.top > window.innerHeight) { chip.style.display = "none"; return; }
+      mountBox(chip);
+      chip.style.display = "block";
+      chip.style.left = Math.max(4, r.left + 12) + "px";
+      chip.style.top = Math.max(4, r.top + 12) + "px";
     }
 
     function render(lines: Shown[]) {

@@ -121,6 +121,9 @@ async function getActiveTabId(): Promise<number | undefined> {
 
 async function refreshLiveButton() {
   const activeTabId = await getActiveTabId();
+  const { liveMuted = false } = await browser.storage.session.get<{ liveMuted?: boolean }>("liveMuted");
+  $("muteRow").hidden = !(activeTabId && activeTabId === tab?.id);
+  input("liveMute").checked = liveMuted;
   const btn = $("toggle");
   if (activeTabId && activeTabId === tab?.id) {
     btn.textContent = "Stop subtitles";
@@ -133,7 +136,14 @@ async function refreshLiveButton() {
     btn.className = "";
   }
 }
-browser.storage.onChanged.addListener((ch, area) => { if (area === "session" && ch.activeTabId) refreshLiveButton(); });
+browser.storage.onChanged.addListener((ch, area) => {
+  if (area === "session" && (ch.activeTabId || ch.liveMuted)) refreshLiveButton();
+});
+
+// Silences what you hear; the audio is still captured, so the subtitles keep going
+input("liveMute").onchange = () => {
+  sendToBackground({ type: "live-mute", muted: input("liveMute").checked }).catch(() => {});
+};
 
 $("toggle").addEventListener("click", async () => {
   saveLiveSettings();
