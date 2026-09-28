@@ -18,11 +18,9 @@ declare global {
 interface Shown { text: string; original: string | null; kind: LineKind; color?: string }
 
 const MAX_TIMELINES = 5;      // videos remembered per page (an ad in the middle counts as one)
-// One growing caption instead of separate lines:
-const GROUP_GAP = 1.5;        // seconds of video without speech that start a new caption
-const HOLD = 2.5;             // keep the caption this long after its last words (video seconds)
+// One subtitle at a time: each new line replaces the previous one
+const HOLD = 2.5;             // keep a line this long after its last words (video seconds)
 const SHOW_AFTER_ARRIVAL = 7000; // ms a line that just arrived stays up, even if its moment has passed
-const MAX_CHARS = 110;        // longer than this: the oldest words drop off the front
 
 // Live (AI) mode: draws the subtitles over the video. Injected into every frame; the frame that plays
 // the video keeps its subtitles by video time, so rewinding shows them again instantly and in sync.
@@ -39,7 +37,7 @@ export default defineContentScript({
     let toast: { text: string; color: string; until: number } | null = null;
     const timelines = new Map<string, Timeline>();
     const arrivals = new WeakMap<TimedCue, number>(); // when each line arrived (performance.now)
-    let untimed: TimedCue[] = [], lastUntimed = -1e9;  // lines with no video to time them against
+    let untimed: TimedCue | null = null, lastUntimed = -1e9; // newest line with no video to time it against
     const pending = new Set<TimedCue>();
     const box = createBox();
     box.id = "live-subs-overlay";
@@ -162,7 +160,7 @@ export default defineContentScript({
           chip.remove();
           watchVolume(null);
           active = false;
-          untimed = []; toast = null;
+          untimed = null; toast = null;
           if (raf) cancelAnimationFrame(raf);
           raf = 0;
           box.remove();
@@ -179,56 +177,39 @@ export default defineContentScript({
         cue = timeline(timing.videoKey).add(timing.start, timing.end, source);
       } else {
         cue = { start: 0, end: 0, text: source, translations: new Map() };
-        if (now - lastUntimed > SHOW_AFTER_ARRIVAL) untimed = []; // a pause: start a new caption
-        untimed.push(cue);
+        untimed = cue;
         lastUntimed = now;
       }
       arrivals.set(cue, now);
       if (translated) cue.translations.set(textLang, translated);
     }
 
-    // ---------- the caption: the lines of the current stretch of speech, joined ----------
+    // ---------- the subtitle on screen: the newest line only ----------
     // Works the same on a first watch (lines arrive a little late) and on a rewind (all lines known).
-    function captionCues(now: number): TimedCue[] {
+    function currentCue(now: number): TimedCue | null {
       const tl = video && key ? timelines.get(key) : undefined;
       if (video && tl) {
         const t = video.currentTime;
         const next = tl.nextIndex(t);
-        const k = (next >= 0 ? next : tl.cues.length) - 1; // last line that started by now
-        const last = tl.cues[k];
+        const last = tl.cues[(next >= 0 ? next : tl.cues.length) - 1]; // newest line that started by now
         if (last && (t <= last.end + HOLD || now - (arrivals.get(last) ?? -1e9) < SHOW_AFTER_ARRIVAL)) {
-          const group = [last];
-          for (let j = k - 1; j >= 0 && group[0]!.start - tl.cues[j]!.end <= GROUP_GAP; j--) group.unshift(tl.cues[j]!);
-          ensureTranslated([...group, ...(next >= 0 ? tl.cues.slice(next, next + 8) : [])]);
-          return group;
+          ensureTranslated([last, ...(next >= 0 ? tl.cues.slice(next, next + 8) : [])]);
+          return last;
         }
       }
-      if (untimed.length && now - lastUntimed < SHOW_AFTER_ARRIVAL) {
-        ensureTranslated(untimed);
+      if (untimed && now - lastUntimed < SHOW_AFTER_ARRIVAL) {
+        ensureTranslated([untimed]);
         return untimed;
       }
-      return [];
+      return null;
     }
 
-    function textOf(c: TimedCue): { text: string; translated: boolean } {
+    function caption(c: TimedCue | null): Shown | null {
+      if (!c) return null;
       const target = lang.targetLang;
       const t = target && target !== "none" ? c.translations.get(target) : undefined;
-      return t == null ? { text: c.text, translated: false } : { text: t, translated: true };
-    }
-
-    function caption(cues: TimedCue[]): Shown | null {
-      if (!cues.length) return null;
-      // Keep the newest words: drop whole lines from the front until it fits
-      let from = 0, length = cues.reduce((n, c) => n + textOf(c).text.length + 1, 0);
-      while (from < cues.length - 1 && length > MAX_CHARS) length -= textOf(cues[from++]!).text.length + 1;
-      const shown = cues.slice(from);
-      const texts = shown.map(textOf);
-      const anyTranslated = texts.some((t) => t.translated);
-      return {
-        text: texts.map((t) => t.text).join(" "),
-        original: lang.showOriginal && anyTranslated ? shown.map((c) => c.text).join(" ") : null,
-        kind: "main"
-      };
+      if (t == null) return { text: c.text, original: null, kind: "main" }; // not translating, or translation on its way
+      return { text: t, original: lang.showOriginal && t !== c.text ? c.text : null, kind: "main" };
     }
 
     // ---------- translation of remembered lines (e.g. after changing the language) ----------
@@ -258,7 +239,7 @@ export default defineContentScript({
       if (now - lastPick > 1000) { lastPick = now; pickVideo(now); }
 
       const lines: Shown[] = [];
-      const main = caption(captionCues(now));
+      const main = caption(currentCue(now));
       if (main) lines.push(main);
       if (toast && toast.until > now) lines.push({ text: toast.text, original: null, kind: "info", color: toast.color });
       else toast = null;
