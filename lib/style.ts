@@ -1,5 +1,21 @@
 // Shared subtitle look (used by the popup preview, live mode and subtitle-file mode).
-export const DEFAULTS = {
+export type Edge = "none" | "shadow" | "outline" | "both";
+export type LineKind = "main" | "original" | "info";
+
+export interface StyleSettings {
+  fontSize: number;
+  textColor: string;
+  bgColor: string;
+  bgOpacity: number;
+  position: number;
+  width: number;
+  fontFamily: string;
+  bold: boolean;
+  edge: Edge;
+  origColor: string;
+}
+
+export const DEFAULTS: StyleSettings = {
   fontSize: 24,          // px (file mode scales it with the video's size)
   textColor: "#ffffff",
   bgColor: "#000000",
@@ -12,7 +28,7 @@ export const DEFAULTS = {
   origColor: "#d7d7d7"   // color of the original line when "also show original" is on
 };
 
-export const FONTS = {
+export const FONTS: Record<string, string> = {
   system: "system-ui, 'Segoe UI', Tahoma, Arial, sans-serif",
   arial: "Arial, Helvetica, sans-serif",
   tahoma: "Tahoma, Verdana, sans-serif",
@@ -24,13 +40,13 @@ export const FONTS = {
   mono: "'Courier New', Consolas, monospace"
 };
 
-function rgba(hex, opacity) {
+function rgba(hex: string, opacity: number): string {
   const h = (hex || "#000000").replace("#", "");
   const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${Math.max(0, Math.min(100, opacity)) / 100})`;
 }
 
-function textShadow(edge) {
+function textShadow(edge: Edge): string {
   const o = "0.06em";
   const outline = `-${o} -${o} 0 #000, ${o} -${o} 0 #000, -${o} ${o} 0 #000, ${o} ${o} 0 #000, 0 -${o} 0 #000, 0 ${o} 0 #000, -${o} 0 0 #000, ${o} 0 0 #000`;
   const shadow = "0 0.05em 0.12em rgba(0,0,0,0.95), 0 0 0.25em rgba(0,0,0,0.6)";
@@ -38,8 +54,8 @@ function textShadow(edge) {
 }
 
 // Inline styles for one subtitle line. kind: "main" | "original" | "info"
-export function lineStyle(s, kind = "main", infoColor = "#9fb6ff") {
-  s = { ...DEFAULTS, ...s };
+export function lineStyle(settings: Partial<StyleSettings>, kind: LineKind = "main", infoColor = "#9fb6ff"): Partial<CSSStyleDeclaration> {
+  const s = { ...DEFAULTS, ...settings };
   const small = kind !== "main";
   return {
     display: "inline-block",
@@ -56,15 +72,15 @@ export function lineStyle(s, kind = "main", infoColor = "#9fb6ff") {
     whiteSpace: "pre-wrap",
     boxDecorationBreak: "clone",
     webkitBoxDecorationBreak: "clone"
-  };
+  } as Partial<CSSStyleDeclaration>;
 }
 
 // CSS for the browser's own subtitle display (used when the bare <video> is fullscreen)
-export function cueCss(s) {
-  s = { ...DEFAULTS, ...s };
+export function cueCss(settings: Partial<StyleSettings>): string {
+  const s = { ...DEFAULTS, ...settings };
   return `video::cue { color: ${s.textColor}; background-color: ${rgba(s.bgColor, s.bgOpacity)};
     font-family: ${FONTS[s.fontFamily] || FONTS.system}; font-weight: ${s.bold ? 600 : 400};
     text-shadow: ${textShadow(s.edge)}; }`;
 }
 
-export const keys = Object.keys(DEFAULTS);
+export const keys = Object.keys(DEFAULTS) as (keyof StyleSettings)[];

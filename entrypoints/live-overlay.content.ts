@@ -1,8 +1,21 @@
 import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import * as S from "@/lib/style";
-import { createBox, lineEl, mountBox, placeBox, onFullscreenChange } from "@/lib/overlay";
+import type { LineKind, StyleSettings } from "@/lib/style";
+import type { LiveOverlayMessage } from "@/lib/messages";
+import { createBox, lineEl, mountBox, placeBox, onFullscreenChange, type Rect } from "@/lib/overlay";
 import { findMainVideo } from "@/lib/video";
+
+declare global {
+  interface Window { __liveSubsLoaded?: boolean }
+}
+
+interface Line {
+  text: string;
+  original: string | null;
+  kind: LineKind;
+  color?: string;
+}
 
 // Live (AI) mode: draws the subtitle box over the video (and inside fullscreen players).
 export default defineContentScript({
@@ -11,14 +24,17 @@ export default defineContentScript({
     if (window.__liveSubsLoaded) return;
     window.__liveSubsLoaded = true;
 
-    let style = { ...S.DEFAULTS }, hideTimer = null;
-    const lines = [];
+    let style: StyleSettings = { ...S.DEFAULTS };
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
+    const lines: Line[] = [];
 
-    browser.storage.local.get(S.DEFAULTS).then((s) => { style = s; render(); });
+    browser.storage.local.get<StyleSettings>(S.DEFAULTS).then((s) => { style = s; render(); });
     browser.storage.onChanged.addListener((ch, area) => {
       if (area !== "local") return;
       let changed = false;
-      for (const k of S.keys) if (ch[k]) { style[k] = ch[k].newValue; changed = true; }
+      for (const k of S.keys) {
+        if (ch[k]) { style = { ...style, [k]: ch[k].newValue }; changed = true; }
+      }
       if (changed) render();
     });
 
@@ -29,8 +45,8 @@ export default defineContentScript({
     function position() {
       const v = findMainVideo();
       const vh = window.innerHeight;
-      let r = v ? v.getBoundingClientRect() : null;
-      if (!r || r.bottom < 0 || r.top > vh) r = { left: 0, width: window.innerWidth, top: 0, bottom: vh, height: vh };
+      const vr = v?.getBoundingClientRect();
+      const r: Rect = vr && vr.bottom >= 0 && vr.top <= vh ? vr : { left: 0, width: window.innerWidth, bottom: vh, height: vh };
       placeBox(box, r, style, style.fontSize || 24);
     }
 
@@ -38,13 +54,13 @@ export default defineContentScript({
       box.replaceChildren();
       for (const l of lines) {
         if (l.original) box.appendChild(lineEl(l.original, "original", style));
-        box.appendChild(lineEl(l.text, l.kind || "main", style, l.color));
+        box.appendChild(lineEl(l.text, l.kind, style, l.color));
       }
       box.style.display = lines.length ? "block" : "none";
       if (lines.length) position();
     }
 
-    function show(text, original = null, kind = "main", color, keepMs = 9000) {
+    function show(text: string, original: string | null = null, kind: LineKind = "main", color?: string, keepMs = 9000) {
       lines.push({ text, original, kind, color });
       while (lines.length > 2) lines.shift();
       mountBox(box);
@@ -58,7 +74,7 @@ export default defineContentScript({
     window.addEventListener("scroll", () => lines.length && position(), true);
     mountBox(box);
 
-    browser.runtime.onMessage.addListener((msg) => {
+    browser.runtime.onMessage.addListener((msg: LiveOverlayMessage) => {
       if (msg.type === "subtitle") show(msg.text, msg.original);
       else if (msg.type === "status") show(msg.text, null, "info", "#9fb6ff", 4000);
       else if (msg.type === "error") show("⚠ " + msg.text, null, "info", "#ff9a9a", 7000);

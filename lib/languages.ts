@@ -1,5 +1,5 @@
 // Shared language list (Google Translate codes; Whisper uses the part before "-")
-export const LANGUAGES = [
+export const LANGUAGES: [code: string, name: string][] = [
   ["ar", "العربية (Arabic)"], ["en", "English"], ["fr", "Français"], ["es", "Español"],
   ["de", "Deutsch"], ["it", "Italiano"], ["pt", "Português"], ["ru", "Русский"],
   ["tr", "Türkçe"], ["fa", "فارسی"], ["ur", "اردو"], ["hi", "हिन्दी"],

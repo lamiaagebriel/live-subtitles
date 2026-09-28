@@ -2,10 +2,23 @@ import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { LANGUAGES } from "@/lib/languages";
 import * as S from "@/lib/style";
+import type { LineKind } from "@/lib/style";
 import * as P from "@/lib/subparse";
-import { SUBFILE_DEFAULTS as SETTING_DEFAULTS } from "@/lib/settings";
-import { createBox, lineEl as makeLine, mountBox, placeBox, onFullscreenChange } from "@/lib/overlay";
+import { SUBFILE_DEFAULTS as SETTING_DEFAULTS, type SubfileSettings } from "@/lib/settings";
+import { createBox, lineEl as makeLine, mountBox, placeBox, onFullscreenChange, fullscreenElement } from "@/lib/overlay";
+import { sendToBackground, type SubfileMessage, type TranslateReply } from "@/lib/messages";
 import { findMainVideo } from "@/lib/video";
+
+declare global {
+  interface Window { __liveSubsFileLoaded?: boolean }
+}
+
+interface Line { text: string; original?: string | null }
+
+// The browser's own subtitle track we add to a video (for bare-video fullscreen)
+interface NativeTrack { track: TextTrack; cue: VTTCue | null; text: string }
+
+type SubOffsets = Record<string, number>;
 
 // "Subtitle file" mode: shows a loaded .srt/.vtt/.ass file perfectly synced to the video.
 // Injected into every frame of the tab. The top frame shows the control panel;
@@ -17,7 +30,7 @@ export default defineContentScript({
     window.__liveSubsFileLoaded = true;
 
     const isTop = window === window.top;
-    const ENCODINGS = [
+    const ENCODINGS: [code: string, name: string][] = [
       ["auto", "Automatic"], ["utf-8", "UTF-8"],
       ["windows-1256", "Arabic (Windows-1256)"], ["iso-8859-6", "Arabic (ISO-8859-6)"],
       ["windows-1252", "Western (Windows-1252)"], ["windows-1250", "Central European (Windows-1250)"],
@@ -28,18 +41,26 @@ export default defineContentScript({
     ];
 
     // ---------- shared state (every frame) ----------
-    let cues = [], fileName = "", offset = 0, hidden = false;
-    let settings = { ...SETTING_DEFAULTS };
-    let video = null, lastPick = -1e9, raf = 0, lastTimeSent = 0;
-    let box = null, lastKey = "", toast = "", toastUntil = 0;
-    const tr = new Map(), pending = new Set();
+    let cues: P.Cue[] = [], fileName = "", offset = 0, hidden = false;
+    let settings: SubfileSettings = { ...SETTING_DEFAULTS };
+    let video: HTMLVideoElement | null = null, lastPick = -1e9, raf = 0, lastTimeSent = 0;
+    let box: HTMLDivElement | null = null, lastKey = "", toast = "", toastUntil = 0;
+    const tr = new Map<number, string>(), pending = new Set<number>();
+    const nativeTracks = new WeakMap<HTMLVideoElement, NativeTrack>();
     let lastTrIdx = -1;
 
     // ---------- top-frame panel state ----------
-    let host = null, root = null, fileBuf = null, encoding = "auto";
-    let remoteTime = null, shownIdx = 0, manualUntil = 0, panelTimer = 0;
+    let host: HTMLDivElement | null = null, root: ShadowRoot | null = null;
+    let fileBuf: ArrayBuffer | null = null, encoding = "auto";
+    let remoteTime: { t: number; paused: boolean; rate: number; at: number } | null = null;
+    let shownIdx = 0, manualUntil = 0, panelTimer: ReturnType<typeof setInterval> | undefined;
 
-    browser.storage.local.get(SETTING_DEFAULTS).then((s) => {
+    // An element of the panel. Only called while the panel exists, and the markup is ours.
+    function $<T extends HTMLElement = HTMLElement>(sel: string): T {
+      return root!.querySelector<T>(sel)!;
+    }
+
+    browser.storage.local.get<SubfileSettings>(SETTING_DEFAULTS).then((s) => {
       settings = s;
       lastKey = "";
       applyCueCss();
@@ -47,18 +68,20 @@ export default defineContentScript({
     });
     browser.storage.onChanged.addListener((ch, area) => {
       if (area !== "local") return;
-      for (const k of Object.keys(SETTING_DEFAULTS)) if (ch[k]) settings[k] = ch[k].newValue;
+      for (const k of Object.keys(SETTING_DEFAULTS) as (keyof SubfileSettings)[]) {
+        if (ch[k]) settings = { ...settings, [k]: ch[k].newValue };
+      }
       applyCueCss();
       if (ch.targetLang) { tr.clear(); lastTrIdx = -1; }
       lastKey = "";
       syncPanelControls();
     });
 
-    function broadcast(payload) {
-      browser.runtime.sendMessage({ type: "subfile-broadcast", payload }).catch(() => {});
+    function broadcast(payload: SubfileMessage) {
+      sendToBackground({ type: "subfile-broadcast", payload }).catch(() => {});
     }
 
-    browser.runtime.onMessage.addListener((msg) => {
+    browser.runtime.onMessage.addListener((msg: SubfileMessage) => {
       switch (msg.type) {
         case "subfile-panel":
           if (isTop) openPanel();
@@ -78,9 +101,11 @@ export default defineContentScript({
         case "subfile-hidden":
           hidden = msg.hidden; lastKey = "";
           break;
-        case "subfile-sync-now":
-          if (video && cues[msg.index]) setOffset(video.currentTime - cues[msg.index].start);
+        case "subfile-sync-now": {
+          const cue = cues[msg.index];
+          if (video && cue) setOffset(video.currentTime - cue.start);
           break;
+        }
         case "subfile-time":
           if (isTop) remoteTime = { t: msg.t, paused: msg.paused, rate: msg.rate, at: performance.now() };
           break;
@@ -91,21 +116,21 @@ export default defineContentScript({
     });
 
     // ---------- offset / delay ----------
-    function setOffset(v) {
+    function setOffset(v: number) {
       broadcast({ type: "subfile-offset", offset: Math.round(v * 100) / 100 });
     }
-    function delayText(o) {
+    function delayText(o: number) {
       if (Math.abs(o) < 0.05) return "Delay 0.0s (original timing)";
       return `Delay ${o > 0 ? "+" : "−"}${Math.abs(o).toFixed(1)}s (subtitles ${o > 0 ? "later" : "earlier"})`;
     }
     async function saveOffset() {
-      const { subOffsets = {} } = await browser.storage.local.get("subOffsets");
+      const { subOffsets = {} } = await browser.storage.local.get<{ subOffsets?: SubOffsets }>("subOffsets");
       subOffsets[fileName] = offset;
       const keys = Object.keys(subOffsets);
-      if (keys.length > 100) delete subOffsets[keys[0]];
+      if (keys.length > 100) delete subOffsets[keys[0]!];
       browser.storage.local.set({ subOffsets });
     }
-    function flash(text) {
+    function flash(text: string) {
       toast = text; toastUntil = performance.now() + 1500; lastKey = "";
     }
 
@@ -114,7 +139,7 @@ export default defineContentScript({
       if (!cues.length || e.ctrlKey || e.altKey || e.metaKey) return;
       const k = e.key.toLowerCase();
       if (k !== "g" && k !== "h") return;
-      const el = e.composedPath ? e.composedPath()[0] : e.target;
+      const el = (e.composedPath()[0] ?? e.target) as HTMLElement | null;
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || ""))) return;
       e.preventDefault(); e.stopPropagation();
       setOffset(offset + (k === "g" ? -1 : 1) * (e.shiftKey ? 1 : 0.1));
@@ -130,15 +155,15 @@ export default defineContentScript({
       if (!raf) raf = requestAnimationFrame(tick);
     }
 
-    function lineFor(i) {
-      const orig = cues[i].text;
+    function lineFor(i: number): Line {
+      const orig = cues[i]!.text;
       if (!settings.targetLang || settings.targetLang === "none") return { text: orig };
       const t = tr.get(i);
       if (t == null) return { text: orig };
       return { text: t, original: settings.showOriginal && t !== orig ? orig : null };
     }
 
-    function tick(now) {
+    function tick(now: number) {
       raf = requestAnimationFrame(tick);
       if (now - lastPick > 1000) { lastPick = now; pickVideo(); }
       if (!video || !cues.length) { if (box) box.style.display = "none"; return; }
@@ -150,11 +175,10 @@ export default defineContentScript({
 
       const t = video.currentTime - offset;
       const idxs = hidden ? [] : P.activeAt(cues, t);
-      const anchor = idxs.length ? idxs[0] : P.nextIndex(cues, t);
+      const anchor = idxs[0] ?? P.nextIndex(cues, t);
       if (anchor >= 0 && anchor !== lastTrIdx) { lastTrIdx = anchor; ensureTranslated(anchor); }
 
-      const fs = document.fullscreenElement || document.webkitFullscreenElement;
-      const nativeMode = fs === video;
+      const nativeMode = fullscreenElement() === video;
       const lines = idxs.map(lineFor);
       const toastOn = now < toastUntil;
       const key = JSON.stringify(lines) + "|" + (toastOn ? toast : "") + "|" + nativeMode;
@@ -162,17 +186,18 @@ export default defineContentScript({
       if (!nativeMode) position();
     }
 
-    function ensureBox() {
+    function ensureBox(): HTMLDivElement {
       if (!box) box = createBox();
       mountBox(box);
+      return box;
     }
 
-    function lineEl(text, kind) {
+    function lineEl(text: string, kind: LineKind) {
       return makeLine(text, kind, settings);
     }
 
     // Look of the browser's own subtitle display (bare-video fullscreen)
-    let cueStyleEl = null;
+    let cueStyleEl: HTMLStyleElement | null = null;
     function applyCueCss() {
       if (!cueStyleEl) {
         cueStyleEl = document.createElement("style");
@@ -182,7 +207,7 @@ export default defineContentScript({
       if (!cueStyleEl.isConnected) (document.head || document.documentElement).appendChild(cueStyleEl);
     }
 
-    function render(lines, toastText, nativeMode) {
+    function render(lines: Line[], toastText: string, nativeMode: boolean) {
       if (nativeMode) {
         if (box) box.style.display = "none";
         const text = lines.map((l) => (l.original ? l.original + "\n" : "") + l.text).join("\n");
@@ -190,14 +215,14 @@ export default defineContentScript({
         return;
       }
       clearNative();
-      ensureBox();
-      box.replaceChildren();
+      const b = ensureBox();
+      b.replaceChildren();
       for (const l of lines) {
-        if (l.original) box.appendChild(lineEl(l.original, "original"));
-        box.appendChild(lineEl(l.text, "main"));
+        if (l.original) b.appendChild(lineEl(l.original, "original"));
+        b.appendChild(lineEl(l.text, "main"));
       }
-      if (toastText) box.appendChild(lineEl(toastText, "info"));
-      box.style.display = box.childNodes.length ? "block" : "none";
+      if (toastText) b.appendChild(lineEl(toastText, "info"));
+      b.style.display = b.childNodes.length ? "block" : "none";
     }
 
     function position() {
@@ -212,49 +237,52 @@ export default defineContentScript({
 
     // When the <video> element itself goes fullscreen nothing can be drawn over it,
     // so the browser's own subtitle track is used for that case.
-    function setNative(text) {
+    function setNative(text: string) {
       if (!video) return;
-      let track = video.__liveSubsTrack;
-      if (!track) { track = video.addTextTrack("subtitles", "Subtitles (file)", ""); video.__liveSubsTrack = track; }
-      track.mode = "showing";
-      if (video.__liveSubsText === text) return;
-      if (video.__liveSubsCue) { try { track.removeCue(video.__liveSubsCue); } catch {} }
-      video.__liveSubsCue = null;
-      video.__liveSubsText = text;
+      let n = nativeTracks.get(video);
+      if (!n) {
+        n = { track: video.addTextTrack("subtitles", "Subtitles (file)", ""), cue: null, text: "" };
+        nativeTracks.set(video, n);
+      }
+      n.track.mode = "showing";
+      if (n.text === text) return;
+      if (n.cue) { try { n.track.removeCue(n.cue); } catch {} }
+      n.cue = null;
+      n.text = text;
       if (text) {
-        const cue = new VTTCue(0, 1e9, text);
-        track.addCue(cue);
-        video.__liveSubsCue = cue;
+        n.cue = new VTTCue(0, 1e9, text);
+        n.track.addCue(n.cue);
       }
     }
     function clearNative() {
-      const v = video;
-      if (!v || !v.__liveSubsTrack) return;
-      if (v.__liveSubsCue) { try { v.__liveSubsTrack.removeCue(v.__liveSubsCue); } catch {} }
-      v.__liveSubsCue = null; v.__liveSubsText = "";
-      v.__liveSubsTrack.mode = "disabled";
+      const n = video && nativeTracks.get(video);
+      if (!n) return;
+      if (n.cue) { try { n.track.removeCue(n.cue); } catch {} }
+      n.cue = null; n.text = "";
+      n.track.mode = "disabled";
     }
     onFullscreenChange(() => { lastKey = ""; });
 
     // ---------- translation (a few lines ahead, cached) ----------
-    function ensureTranslated(from) {
+    function ensureTranslated(from: number) {
       const target = settings.targetLang;
       if (!target || target === "none") return;
-      const batch = [];
+      const batch: number[] = [];
       let len = 0;
       for (let i = from; i < cues.length && i < from + 25 && batch.length < 12; i++) {
         if (tr.has(i) || pending.has(i)) continue;
-        if (batch.length && len + cues[i].text.length > 1200) break;
+        const size = cues[i]!.text.length;
+        if (batch.length && len + size > 1200) break;
         batch.push(i);
-        len += cues[i].text.length;
+        len += size;
       }
       if (!batch.length) return;
       batch.forEach((i) => pending.add(i));
       const snapshot = cues;
-      browser.runtime.sendMessage({ type: "translate-batch", target, texts: batch.map((i) => cues[i].text) })
+      sendToBackground<TranslateReply>({ type: "translate-batch", lang: target, texts: batch.map((i) => snapshot[i]!.text) })
         .then((res) => {
-          if (target !== settings.targetLang || snapshot !== cues || !res?.texts) return;
-          batch.forEach((i, k) => tr.set(i, res.texts[k] || cues[i].text));
+          if (target !== settings.targetLang || snapshot !== cues || !res || !("texts" in res)) return;
+          batch.forEach((i, k) => tr.set(i, res.texts[k] || snapshot[i]!.text));
           lastKey = "";
         })
         .catch(() => {})
@@ -307,10 +335,11 @@ export default defineContentScript({
     `;
 
     function openPanel() {
-      if (host) { root.querySelector(".body").hidden = false; return; }
-      host = document.createElement("div");
-      host.style.cssText = "all: initial; position: fixed; top: 16px; right: 16px; z-index: 2147483647;";
-      root = host.attachShadow({ mode: "open" });
+      if (host) { $(".body").hidden = false; return; }
+      const panelHost = document.createElement("div");
+      host = panelHost;
+      panelHost.style.cssText = "all: initial; position: fixed; top: 16px; right: 16px; z-index: 2147483647;";
+      root = panelHost.attachShadow({ mode: "open" });
       root.innerHTML = `
         <style>${PANEL_CSS}</style>
         <div class="panel">
@@ -348,37 +377,38 @@ export default defineContentScript({
             </div>
           </div>
         </div>`;
-      document.documentElement.appendChild(host);
+      document.documentElement.appendChild(panelHost);
 
-      const q = (s) => root.querySelector(s);
-      for (const [code, name] of LANGUAGES) q(".lang").add(new Option(name, code));
-      for (const [code, name] of ENCODINGS) q(".enc").add(new Option(name, code));
+      const lang = $<HTMLSelectElement>(".lang"), enc = $<HTMLSelectElement>(".enc");
+      const file = $<HTMLInputElement>(".file"), orig = $<HTMLInputElement>(".orig"), hide = $<HTMLInputElement>(".hide");
+      for (const [code, name] of LANGUAGES) lang.add(new Option(name, code));
+      for (const [code, name] of ENCODINGS) enc.add(new Option(name, code));
 
-      q(".pick").onclick = () => q(".file").click();
-      q(".file").onchange = (e) => { const f = e.target.files[0]; if (f) loadFile(f); e.target.value = ""; };
-      q(".min").onclick = () => { q(".body").hidden = !q(".body").hidden; };
-      q(".close").onclick = () => { broadcast({ type: "subfile-close" }); teardown(); };
-      root.querySelectorAll("[data-d]").forEach((b) => { b.onclick = () => setOffset(offset + Number(b.dataset.d)); });
-      q(".reset").onclick = () => setOffset(0);
-      q(".prev").onclick = () => moveHelper(-1);
-      q(".next").onclick = () => moveHelper(1);
-      q(".now").onclick = () => { broadcast({ type: "subfile-sync-now", index: shownIdx }); manualUntil = 0; };
-      q(".lang").onchange = (e) => browser.storage.local.set({ targetLang: e.target.value });
-      q(".orig").onchange = (e) => browser.storage.local.set({ showOriginal: e.target.checked });
-      q(".hide").onchange = (e) => broadcast({ type: "subfile-hidden", hidden: e.target.checked });
-      q(".enc").onchange = (e) => { encoding = e.target.value; if (fileBuf) applyFile(true); };
+      $(".pick").onclick = () => file.click();
+      file.onchange = () => { const f = file.files?.[0]; if (f) loadFile(f); file.value = ""; };
+      $(".min").onclick = () => { $(".body").hidden = !$(".body").hidden; };
+      $(".close").onclick = () => { broadcast({ type: "subfile-close" }); teardown(); };
+      root.querySelectorAll<HTMLButtonElement>("[data-d]").forEach((b) => { b.onclick = () => setOffset(offset + Number(b.dataset.d)); });
+      $(".reset").onclick = () => setOffset(0);
+      $(".prev").onclick = () => moveHelper(-1);
+      $(".next").onclick = () => moveHelper(1);
+      $(".now").onclick = () => { broadcast({ type: "subfile-sync-now", index: shownIdx }); manualUntil = 0; };
+      lang.onchange = () => browser.storage.local.set({ targetLang: lang.value });
+      orig.onchange = () => browser.storage.local.set({ showOriginal: orig.checked });
+      hide.onchange = () => broadcast({ type: "subfile-hidden", hidden: hide.checked });
+      enc.onchange = () => { encoding = enc.value; if (fileBuf) applyFile(true); };
 
       // Drag the panel by its header
-      const head = q(".head");
+      const head = $(".head");
       head.addEventListener("pointerdown", (e) => {
-        if (e.target.closest("button")) return;
-        const r = host.getBoundingClientRect();
+        if ((e.target as Element).closest("button")) return;
+        const r = panelHost.getBoundingClientRect();
         const dx = e.clientX - r.left, dy = e.clientY - r.top;
         head.setPointerCapture(e.pointerId);
-        const move = (ev) => {
-          host.style.left = Math.max(0, Math.min(innerWidth - 60, ev.clientX - dx)) + "px";
-          host.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + "px";
-          host.style.right = "auto";
+        const move = (ev: PointerEvent) => {
+          panelHost.style.left = Math.max(0, Math.min(innerWidth - 60, ev.clientX - dx)) + "px";
+          panelHost.style.top = Math.max(0, Math.min(innerHeight - 40, ev.clientY - dy)) + "px";
+          panelHost.style.right = "auto";
         };
         const up = () => { head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up); };
         head.addEventListener("pointermove", move);
@@ -402,64 +432,65 @@ export default defineContentScript({
       loadFile(f);
     }, true);
 
-    function setStatus(text, cls = "") {
+    function setStatus(text: string, cls = "") {
       if (!root) return;
-      const s = root.querySelector(".status");
+      const s = $(".status");
       s.textContent = text;
       s.className = "status hint " + (cls || "muted");
     }
 
-    async function loadFile(file) {
+    async function loadFile(file: File) {
       fileBuf = await file.arrayBuffer();
       fileName = file.name;
       encoding = "auto";
-      if (root) root.querySelector(".enc").value = "auto";
+      if (root) $<HTMLSelectElement>(".enc").value = "auto";
       applyFile(false);
     }
 
-    async function applyFile(keepOffset) {
-      let text;
+    async function applyFile(keepOffset: boolean) {
+      if (!fileBuf) return;
+      let text: string;
       try { text = P.decode(fileBuf, encoding); } catch { return showFileError("This encoding can't read the file. Try another one."); }
       const parsed = P.parse(text);
       if (!parsed.length) return showFileError("No subtitle lines found. Supported formats: .srt, .vtt, .ass, .ssa");
       let startOffset = offset;
       if (!keepOffset) {
-        const { subOffsets = {} } = await browser.storage.local.get("subOffsets");
+        const { subOffsets = {} } = await browser.storage.local.get<{ subOffsets?: SubOffsets }>("subOffsets");
         startOffset = subOffsets[fileName] || 0;
       }
       broadcast({ type: "subfile-cues", cues: parsed, name: fileName, offset: startOffset });
     }
 
-    function showFileError(text) {
+    function showFileError(text: string) {
       if (!root) return;
-      const f = root.querySelector(".fname");
+      const f = $(".fname");
       f.textContent = text;
       f.className = "fname err";
     }
 
     function updatePanelLoaded() {
       if (!root) return;
-      const f = root.querySelector(".fname");
+      const f = $(".fname");
       f.textContent = `✓ ${fileName} (${cues.length} lines)`;
       f.className = "fname ok";
-      root.querySelector(".loaded").hidden = false;
-      root.querySelector(".hide").checked = hidden;
+      $(".loaded").hidden = false;
+      $<HTMLInputElement>(".hide").checked = hidden;
       updateOffsetLabel();
     }
 
     function updateOffsetLabel() {
       if (!root) return;
       const o = offset;
-      root.querySelector(".off").textContent = (o > 0 ? "+" : o < 0 ? "−" : "") + Math.abs(o).toFixed(1) + "s";
+      $(".off").textContent = (o > 0 ? "+" : o < 0 ? "−" : "") + Math.abs(o).toFixed(1) + "s";
     }
 
     function syncPanelControls() {
       if (!root) return;
-      root.querySelector(".lang").value = settings.targetLang || "none";
-      root.querySelector(".orig").checked = !!settings.showOriginal;
+      $<HTMLSelectElement>(".lang").value = settings.targetLang || "none";
+      $<HTMLInputElement>(".orig").checked = !!settings.showOriginal;
     }
 
-    function playerTime() {
+    function playerTime(): number | null {
       if (video) return video.currentTime;
       if (remoteTime && performance.now() - remoteTime.at < 3000) {
         return remoteTime.t + (remoteTime.paused ? 0 : (performance.now() - remoteTime.at) / 1000 * (remoteTime.rate || 1));
@@ -467,7 +498,7 @@ export default defineContentScript({
       return null;
     }
 
-    function moveHelper(d) {
+    function moveHelper(d: number) {
       if (!cues.length) return;
       shownIdx = Math.max(0, Math.min(cues.length - 1, shownIdx + d));
       manualUntil = performance.now() + 10000;
@@ -479,7 +510,7 @@ export default defineContentScript({
       const t = playerTime();
       if (performance.now() > manualUntil && t != null) {
         const a = P.activeAt(cues, t - offset);
-        const n = a.length ? a[0] : P.nextIndex(cues, t - offset);
+        const n = a[0] ?? P.nextIndex(cues, t - offset);
         shownIdx = n >= 0 ? n : cues.length - 1;
       }
       drawHelper();
@@ -490,7 +521,7 @@ export default defineContentScript({
     function drawHelper() {
       const c = cues[shownIdx];
       if (!root || !c) return;
-      const el = root.querySelector(".cue");
+      const el = $(".cue");
       el.textContent = `${P.fmt(c.start)}  ${c.text.replace(/\n/g, " ")}`;
       el.title = c.text;
     }
